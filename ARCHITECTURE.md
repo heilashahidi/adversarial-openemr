@@ -386,6 +386,8 @@ The state store is a single `state.db` SQLite file with five tables (`findings`,
 
 **When to upgrade:** the moment we run agents concurrently. SQLite's write lock serializes everything; once the Red Team emits attacks in parallel, write contention will start producing `database is locked`. Migration target: Postgres + a small queue (Redis or SQS) for AttackPayloads. Same schema, different driver.
 
+**Durable export.** `state.db` is gitignored (it's runtime state). After every campaign, `run_attacks.py` writes a structured JSON snapshot to `evals/results/attack_results_<timestamp>.json` and updates `evals/results/latest_results.json`. These are committed to the repo and are what the hosted dashboard (§8.1) reads — so the dashboard never depends on the local DB and there is one canonical history of results in Git.
+
 ### 6.2 Coordination: simple loop, not LangGraph
 
 `langgraph` and `langchain-core` are in `requirements.txt` from an earlier exploration. We are **not using them**. The current coordination is a linear campaign loop (§3) in `run_attacks.py`. The decision:
@@ -416,6 +418,8 @@ Empirical: a 24-attack campaign with Sonnet 4.5 as Judge costs **$0.09**. That's
 | 100K | 100,000 | ~$10,000 (needs architectural changes) |
 
 At 100K runs: switch Judge to Haiku 4.5 for low-severity cases (escalate to Sonnet 4.5 only on uncertain verdicts), batch the Judge API where supported, cache regression results (target hasn't changed → don't re-judge), deduplicate attacks by hash before sending.
+
+**Hosting cost: $0.** The dashboard runs on Hugging Face Spaces CPU-basic (free tier). Compute, bandwidth, and TLS are included; the only operating cost is the per-campaign OpenRouter spend above.
 
 ### 7.2 Rate Limits
 
@@ -454,6 +458,16 @@ At 100K runs: switch Judge to Haiku 4.5 for low-severity cases (escalate to Sonn
 | Target-error signals | HTTP 500s, timeouts — possible DoS or input-validation bugs | Human (these need investigation, not retesting) |
 
 Two audiences: the Orchestrator reads coverage and cost; a human reads the agent trace and regression trends.
+
+### 8.1 Human-facing Dashboard
+
+The human side of the observability layer is surfaced through a deployed Streamlit dashboard, hosted free on Hugging Face Spaces (Docker SDK):
+
+**Live URL:** [https://heilashahidi-adversarial-openemr.hf.space/](https://heilashahidi-adversarial-openemr.hf.space/)
+
+The dashboard is a read-only viewer of committed run artifacts (`evals/results/latest_results.json`, `THREAT_MODEL.md`, `ARCHITECTURE.md`, `config.ATTACK_SUBCATEGORIES`). It performs no live target calls and needs no secrets. Five pages: Overview (verdict mix, by-category breakdown, target failures), Coverage Map (heatmap of all 26 threat-model sub-vectors), Attack Browser (every case with prompt, target response, judge verdict + reasoning), Threat Model, and Architecture. To update what viewers see: rerun the attack suite locally and `git push` — Spaces auto-rebuilds.
+
+This keeps the operator and the grader looking at exactly the same artifacts that the Orchestrator uses internally; there is no separate reporting database that could drift from the state store.
 
 ---
 
