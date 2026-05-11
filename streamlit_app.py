@@ -16,6 +16,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 
@@ -30,6 +31,21 @@ VERDICT_EMOJI = {
     "defended": "🟢",
     "partial":  "🟡",
     "error":    "⚪",
+}
+
+VERDICT_COLOR_HEX = {
+    "Bypass":   "#dc2626",   # red-600
+    "Defended": "#16a34a",   # green-600
+    "Partial":  "#ca8a04",   # amber-600
+    "Error":    "#9ca3af",   # gray-400
+    "Untested": "#e5e7eb",   # gray-200
+}
+
+VERDICT_COLOR_TAG = {
+    "bypass":   "red",
+    "defended": "green",
+    "partial":  "orange",
+    "error":    "gray",
 }
 
 
@@ -92,7 +108,16 @@ categories, subcategories = load_subcategories()
 
 if page == "Overview":
     st.title("Adversarial AI Security Platform")
-    st.caption(f"**Target:** Clinical Co-Pilot at `{TARGET_URL}`")
+    st.markdown(
+        f"""
+        <div style="display:inline-block;background:#dc2626;color:white;
+                    padding:4px 14px;border-radius:12px;font-size:0.85em;
+                    font-weight:600;letter-spacing:0.02em;margin-bottom:8px;">
+            🎯 LIVE TARGET · {TARGET_URL.replace("https://", "")}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
     if not results:
         st.warning(
@@ -104,6 +129,7 @@ if page == "Overview":
     summary = results.get("summary", {})
     by_cat = results.get("by_category", {})
     rs = results.get("results", [])
+    judge_cost = sum(r.get("judge_cost", 0) for r in rs)
 
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Total attacks", results.get("total_attacks", 0))
@@ -112,12 +138,87 @@ if page == "Overview":
     c4.metric("🟡 Partial", summary.get("partial", 0))
     c5.metric("⚪ Errors", summary.get("error", 0))
 
-    judge_cost = sum(r.get("judge_cost", 0) for r in rs)
     st.caption(
         f"Last run: `{results.get('timestamp', 'unknown')}` · "
         f"Judge cost: ${judge_cost:.4f} · "
         f"Source: `evals/results/latest_results.json`"
     )
+
+    # ── Charts row ──
+    st.divider()
+    chart_col1, chart_col2 = st.columns([1, 2])
+
+    with chart_col1:
+        st.markdown("**Verdict mix**")
+        verdict_rows = [
+            {"Verdict": "Bypass",   "Count": summary.get("bypass",   0)},
+            {"Verdict": "Defended", "Count": summary.get("defended", 0)},
+            {"Verdict": "Partial",  "Count": summary.get("partial",  0)},
+            {"Verdict": "Error",    "Count": summary.get("error",    0)},
+        ]
+        verdict_df = pd.DataFrame([r for r in verdict_rows if r["Count"] > 0])
+        if not verdict_df.empty:
+            donut = (
+                alt.Chart(verdict_df)
+                .mark_arc(innerRadius=55, outerRadius=95, stroke="white", strokeWidth=2)
+                .encode(
+                    theta=alt.Theta("Count:Q"),
+                    color=alt.Color(
+                        "Verdict:N",
+                        scale=alt.Scale(
+                            domain=["Bypass", "Defended", "Partial", "Error"],
+                            range=[
+                                VERDICT_COLOR_HEX["Bypass"],
+                                VERDICT_COLOR_HEX["Defended"],
+                                VERDICT_COLOR_HEX["Partial"],
+                                VERDICT_COLOR_HEX["Error"],
+                            ],
+                        ),
+                        legend=alt.Legend(orient="bottom", title=None),
+                    ),
+                    tooltip=["Verdict", "Count"],
+                )
+                .properties(height=240)
+            )
+            st.altair_chart(donut, use_container_width=True)
+
+    with chart_col2:
+        st.markdown("**By category**")
+        cat_rows = []
+        for cat, counts in by_cat.items():
+            for v in ["bypass", "defended", "partial", "error"]:
+                if counts.get(v, 0) > 0:
+                    cat_rows.append({
+                        "Category": cat,
+                        "Verdict": v.capitalize(),
+                        "Count": counts.get(v, 0),
+                    })
+        if cat_rows:
+            cat_df = pd.DataFrame(cat_rows)
+            stacked = (
+                alt.Chart(cat_df)
+                .mark_bar(stroke="white", strokeWidth=1)
+                .encode(
+                    x=alt.X("Count:Q", title="Attacks", stack="zero"),
+                    y=alt.Y("Category:N", title=None, sort="-x"),
+                    color=alt.Color(
+                        "Verdict:N",
+                        scale=alt.Scale(
+                            domain=["Bypass", "Defended", "Partial", "Error"],
+                            range=[
+                                VERDICT_COLOR_HEX["Bypass"],
+                                VERDICT_COLOR_HEX["Defended"],
+                                VERDICT_COLOR_HEX["Partial"],
+                                VERDICT_COLOR_HEX["Error"],
+                            ],
+                        ),
+                        legend=alt.Legend(orient="bottom", title=None),
+                    ),
+                    tooltip=["Category", "Verdict", "Count"],
+                )
+                .properties(height=240)
+            )
+            st.altair_chart(stacked, use_container_width=True)
 
     st.divider()
     st.subheader("What this run tells us")
@@ -206,6 +307,78 @@ elif page == "Coverage Map":
     c3.metric("Coverage gap", total_subs - tested)
 
     st.divider()
+    st.subheader("Coverage at a glance")
+    st.caption("Each tile is one sub-vector from the threat model. Color = worst outcome observed.")
+
+    # Build heatmap data — one row per (category, subcategory)
+    grid_rows = []
+    for cat in categories:
+        subs = subcategories.get(cat, [])
+        for i, sub in enumerate(subs):
+            counts = coverage.get((cat, sub), {"bypass": 0, "defended": 0, "partial": 0, "error": 0})
+            total = sum(counts.values())
+            if counts["bypass"] > 0:
+                status = "Bypass"
+            elif counts["partial"] > 0:
+                status = "Partial"
+            elif counts["error"] > 0:
+                status = "Error"
+            elif counts["defended"] > 0:
+                status = "Defended"
+            else:
+                status = "Untested"
+            grid_rows.append({
+                "Category": cat,
+                "Subcategory": sub,
+                "Pos": i,
+                "Status": status,
+                "Attacks": total,
+                "Label": f"{sub} ({total})" if total else sub,
+            })
+
+    grid_df = pd.DataFrame(grid_rows)
+    heatmap = (
+        alt.Chart(grid_df)
+        .mark_rect(stroke="white", strokeWidth=3, cornerRadius=4)
+        .encode(
+            x=alt.X("Pos:O", title=None, axis=None),
+            y=alt.Y("Category:N", title=None, sort=categories),
+            color=alt.Color(
+                "Status:N",
+                scale=alt.Scale(
+                    domain=["Bypass", "Partial", "Error", "Defended", "Untested"],
+                    range=[
+                        VERDICT_COLOR_HEX["Bypass"],
+                        VERDICT_COLOR_HEX["Partial"],
+                        VERDICT_COLOR_HEX["Error"],
+                        VERDICT_COLOR_HEX["Defended"],
+                        VERDICT_COLOR_HEX["Untested"],
+                    ],
+                ),
+                legend=alt.Legend(orient="bottom", title=None),
+            ),
+            tooltip=["Category", "Subcategory", "Status", "Attacks"],
+        )
+        .properties(height=260)
+    )
+    labels = (
+        alt.Chart(grid_df)
+        .mark_text(fontSize=10, fontWeight=500)
+        .encode(
+            x=alt.X("Pos:O"),
+            y=alt.Y("Category:N", sort=categories),
+            text="Subcategory:N",
+            color=alt.condition(
+                "datum.Status == 'Untested' || datum.Status == 'Partial'",
+                alt.value("#0f172a"),
+                alt.value("white"),
+            ),
+            tooltip=["Category", "Subcategory", "Status", "Attacks"],
+        )
+    )
+    st.altair_chart(heatmap + labels, use_container_width=True)
+
+    st.divider()
 
     for cat in categories:
         subs = subcategories.get(cat, [])
@@ -266,12 +439,13 @@ elif page == "Attack Browser":
     for r in filtered:
         verdict = r.get("verdict", "error")
         emoji = VERDICT_EMOJI.get(verdict, "⚪")
+        color_tag = VERDICT_COLOR_TAG.get(verdict, "gray")
         confidence = r.get("verdict_confidence", 0.0)
 
         header = (
             f"{emoji} **[{r.get('attack_id')}]** "
             f"`{r.get('category')}/{r.get('subcategory')}` — "
-            f"{verdict.upper()} (conf {confidence:.2f})"
+            f":{color_tag}[**{verdict.upper()}**] (conf {confidence:.2f})"
         )
 
         with st.expander(header):
