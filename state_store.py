@@ -40,8 +40,8 @@ def init_db():
             category TEXT NOT NULL,
             subcategory TEXT NOT NULL DEFAULT '',
             total_attacks INTEGER DEFAULT 0,
-            successes INTEGER DEFAULT 0,
-            failures INTEGER DEFAULT 0,
+            bypasses INTEGER DEFAULT 0,
+            defenses INTEGER DEFAULT 0,
             partials INTEGER DEFAULT 0,
             last_tested TEXT DEFAULT '',
             PRIMARY KEY (category, subcategory)
@@ -154,7 +154,7 @@ def get_partial_successes(category=None):
 
 def update_coverage(category, subcategory, verdict):
     conn = _get_conn()
-    col = {"success": "successes", "fail": "failures", "partial": "partials"}.get(verdict, "failures")
+    col = {"bypass": "bypasses", "defended": "defenses", "partial": "partials"}.get(verdict, "defenses")
     # Ensure the row exists even if the Red Team invented a new subcategory not in config
     conn.execute(
         "INSERT OR IGNORE INTO coverage (category, subcategory, total_attacks) VALUES (?, ?, 0)",
@@ -185,8 +185,8 @@ def get_coverage_by_category():
     rows = conn.execute(
         """SELECT category,
                   SUM(total_attacks) AS total_attacks,
-                  SUM(successes)     AS successes,
-                  SUM(failures)      AS failures,
+                  SUM(bypasses)      AS bypasses,
+                  SUM(defenses)      AS defenses,
                   SUM(partials)      AS partials,
                   MAX(last_tested)   AS last_tested
            FROM coverage

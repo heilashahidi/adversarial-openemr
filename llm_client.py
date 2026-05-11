@@ -30,6 +30,7 @@ def call_llm(
     temperature: float = 0.7,
     max_tokens: int = 1024,
     json_mode: bool = False,
+    extra_body: dict = None,
 ) -> dict:
     """
     Call an LLM via OpenRouter.
@@ -57,6 +58,9 @@ def call_llm(
 
     if json_mode:
         kwargs["response_format"] = {"type": "json_object"}
+
+    if extra_body:
+        kwargs["extra_body"] = extra_body
 
     start = time.time()
     try:

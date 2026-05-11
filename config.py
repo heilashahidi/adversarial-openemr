@@ -5,6 +5,13 @@ Target: Clinical Co-Pilot (Weeks 1-2) deployed on DigitalOcean
 
 import os
 
+# Load .env if present so subprocesses pick up keys without an exported shell var
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+except ImportError:
+    pass
+
 # ── Target System ──
 TARGET_BASE_URL = os.getenv("TARGET_BASE_URL", "https://openemr.146-190-75-148.sslip.io")
 TARGET_CHAT_ENDPOINT = f"{TARGET_BASE_URL}/chat"
@@ -61,7 +68,7 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 MODELS = {
     "red_team": os.getenv("RED_TEAM_MODEL", "mistralai/mistral-7b-instruct"),
     "red_team_mutation": os.getenv("MUTATION_MODEL", "meta-llama/llama-3.1-8b-instruct"),
-    "judge": os.getenv("JUDGE_MODEL", "anthropic/claude-3.5-haiku"),
+    "judge": os.getenv("JUDGE_MODEL", "anthropic/claude-sonnet-4.5"),
     "orchestrator": os.getenv("ORCHESTRATOR_MODEL", "meta-llama/llama-3.1-8b-instruct"),
     "documentation": os.getenv("DOCUMENTATION_MODEL", "mistralai/mistral-7b-instruct"),
 }
@@ -71,7 +78,9 @@ MODEL_COSTS = {
     "mistralai/mistral-7b-instruct": {"input": 0.06, "output": 0.06},
     "meta-llama/llama-3.1-8b-instruct": {"input": 0.05, "output": 0.05},
     "anthropic/claude-3.5-haiku": {"input": 0.25, "output": 1.25},
+    "anthropic/claude-haiku-4.5": {"input": 1.00, "output": 5.00},
     "anthropic/claude-sonnet-4-20250514": {"input": 3.00, "output": 15.00},
+    "anthropic/claude-sonnet-4.5": {"input": 3.00, "output": 15.00},
 }
 
 # ── Attack Categories ──

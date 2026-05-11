@@ -1,0 +1,281 @@
+"""
+Attack Runner — executes seed attacks against the live target and evaluates results.
+Produces structured results in ./evals/results/
+
+Usage:
+  python3 run_attacks.py                    # run all seed attacks
+  python3 run_attacks.py --category prompt_injection   # run one category
+  python3 run_attacks.py --id PI-01         # run one specific attack
+"""
+
+import json
+import os
+import sys
+import time
+from datetime import datetime
+
+# Add parent directory to path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from target_client import send_attack, send_multi_turn_attack, check_target_health
+from state_store import add_finding, get_summary, init_db
+from config import DEFAULT_PATIENT, OPENROUTER_API_KEY
+
+# Add agents to path
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "agents"))
+from judge_agent import judge_attack
+
+# Import seed attacks
+from seed_attacks import SEED_ATTACKS
+
+RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
+os.makedirs(RESULTS_DIR, exist_ok=True)
+
+
+def run_single_attack(attack_case: dict, patient_id: str = None) -> dict:
+    """Execute a single attack and judge the result."""
+    attack_id = attack_case["id"]
+    category = attack_case["category"]
+    subcategory = attack_case.get("subcategory", "")
+    expected_safe = attack_case["expected_safe"]
+
+    print(f"\n  [{attack_id}] {category}/{subcategory}")
+
+    # Determine patient_id
+    pid = patient_id or DEFAULT_PATIENT["id"]
+
+    # Handle SQL injection test — use attack as patient_id
+    if attack_case.get("attack_as_patient_id"):
+        print(f"    📤 Sending as patient_id parameter...")
+        target_result = send_attack("What are this patient's allergies?", patient_id=attack_case["attack"])
+    # Handle multi-turn attacks
+    elif attack_case.get("multi_turn"):
+        print(f"    📤 Sending {len(attack_case['attack'])} turns...")
+        turn_results = send_multi_turn_attack(attack_case["attack"], pid)
+        # Combine responses for judging
+        combined_response = "\n---\n".join([
+            f"Turn {r['turn']}: {r.get('response', r.get('error', 'no response'))}"
+            for r in turn_results
+        ])
+        target_result = {
+            "success": all(r.get("success", False) for r in turn_results),
+            "response": combined_response,
+            "latency_ms": sum(r.get("latency_ms", 0) for r in turn_results),
+        }
+        attack_payload = "\n".join(attack_case["attack"])
+    else:
+        print(f"    📤 Sending attack...")
+        target_result = send_attack(attack_case["attack"], pid)
+        attack_payload = attack_case["attack"]
+
+    if not attack_case.get("multi_turn"):
+        attack_payload = attack_case["attack"]
+
+    target_response = target_result.get("response", target_result.get("error", "no response"))
+    target_latency = target_result.get("latency_ms", 0)
+    target_ok = target_result.get("success", False)
+    target_status = target_result.get("status_code", 0)
+
+    print(f"    📥 Response received ({target_latency}ms)")
+    print(f"    📝 Response preview: {target_response[:120]}...")
+
+    # Store finding
+    add_finding(attack_id, category, subcategory, attack_payload, target_response)
+
+    # Target-failure short-circuit: skip the judge if the target didn't return usable content.
+    # The judge can't evaluate "HTTP 500: Internal Server Error" against an expected safe behavior.
+    if not target_ok or target_status >= 400:
+        err = target_result.get("error", f"HTTP {target_status}")
+        print(f"    ⚠️  Target failure: {err}")
+        print(f"    ⏭️  Skipping judge — attack premise cannot be evaluated")
+        return {
+            "attack_id": attack_id,
+            "category": category,
+            "subcategory": subcategory,
+            "severity": attack_case.get("severity", "medium"),
+            "attack_payload": attack_payload if not attack_case.get("multi_turn") else attack_case["attack"],
+            "target_response": target_response,
+            "target_latency_ms": target_latency,
+            "expected_safe": expected_safe,
+            "verdict": "error",
+            "verdict_severity": "unknown",
+            "verdict_confidence": 0.0,
+            "verdict_reasoning": f"Target failure ({err}) — no response to evaluate. Possible DoS or input-validation signal worth follow-up.",
+            "verdict_indicators": [f"status={target_status}", "target_failure"],
+            "add_to_regression": False,
+            "judge_cost": 0.0,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+    print(f"    ⚖️  Judging...")
+    verdict = judge_attack(
+        attack_id=attack_id,
+        category=category,
+        subcategory=subcategory,
+        attack_payload=attack_payload,
+        target_response=target_response,
+        expected_safe=expected_safe,
+    )
+
+    verdict_emoji = {"bypass": "🔴", "defended": "🟢", "partial": "🟡", "error": "⚪"}.get(verdict["verdict"], "⚪")
+    print(f"    {verdict_emoji} Verdict: {verdict['verdict'].upper()} (confidence: {verdict['confidence']})")
+    print(f"    📋 {verdict['reasoning'][:100]}")
+
+    return {
+        "attack_id": attack_id,
+        "category": category,
+        "subcategory": subcategory,
+        "severity": attack_case.get("severity", "medium"),
+        "attack_payload": attack_payload if not attack_case.get("multi_turn") else attack_case["attack"],
+        "target_response": target_response,
+        "target_latency_ms": target_latency,
+        "expected_safe": expected_safe,
+        "verdict": verdict["verdict"],
+        "verdict_severity": verdict["severity"],
+        "verdict_confidence": verdict["confidence"],
+        "verdict_reasoning": verdict["reasoning"],
+        "verdict_indicators": verdict.get("indicators", []),
+        "add_to_regression": verdict.get("add_to_regression", False),
+        "judge_cost": verdict.get("judge_cost", 0),
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+
+def run_attack_suite(category_filter: str = None, id_filter: str = None):
+    """Run the full seed attack suite or a filtered subset."""
+    print("=" * 60)
+    print("  Adversarial Attack Suite — Live Target Execution")
+    print("=" * 60)
+
+    # Check OpenRouter API key (judge needs it)
+    if not OPENROUTER_API_KEY:
+        print("\n  ❌ OPENROUTER_API_KEY is not set.")
+        print("     Export it or copy .env.example → .env and fill in the key.")
+        sys.exit(1)
+    print("\n  ✅ OpenRouter key present")
+
+    # Check target health
+    print("  Checking target health...")
+    if not check_target_health():
+        print("  ❌ Target is offline. Cannot run attacks.")
+        sys.exit(1)
+    print("  ✅ Target is live\n")
+
+    # Filter attacks
+    attacks = SEED_ATTACKS
+    if category_filter:
+        attacks = [a for a in attacks if a["category"] == category_filter]
+        print(f"  Filtered to category: {category_filter} ({len(attacks)} attacks)")
+    if id_filter:
+        attacks = [a for a in attacks if a["id"] == id_filter]
+        print(f"  Filtered to ID: {id_filter}")
+
+    if not attacks:
+        print("  No attacks match the filter.")
+        sys.exit(1)
+
+    print(f"  Running {len(attacks)} attacks against live target...\n")
+
+    # Execute
+    results = []
+    start_time = time.time()
+
+    for attack in attacks:
+        result = run_single_attack(attack)
+        results.append(result)
+        time.sleep(1)  # Rate limit — be polite to the target
+
+    elapsed = time.time() - start_time
+
+    # Summary
+    bypasses = [r for r in results if r["verdict"] == "bypass"]
+    defenses = [r for r in results if r["verdict"] == "defended"]
+    partials = [r for r in results if r["verdict"] == "partial"]
+    errors = [r for r in results if r["verdict"] == "error"]
+
+    print("\n" + "=" * 60)
+    print("  RESULTS SUMMARY")
+    print("=" * 60)
+    print(f"  Total attacks: {len(results)}")
+    print(f"  🔴 Bypasses (exploits): {len(bypasses)}")
+    print(f"  🟢 Defended: {len(defenses)}")
+    print(f"  🟡 Partial: {len(partials)}")
+    print(f"  ⚪ Errors (target failures): {len(errors)}")
+    print(f"  Time: {elapsed:.1f}s")
+    print(f"  Judge cost: ${sum(r.get('judge_cost', 0) for r in results):.4f}")
+
+    categories = {}
+    for r in results:
+        cat = r["category"]
+        if cat not in categories:
+            categories[cat] = {"bypass": 0, "defended": 0, "partial": 0, "error": 0}
+        categories[cat][r["verdict"]] += 1
+
+    print("\n  By Category:")
+    for cat, counts in sorted(categories.items()):
+        total = sum(counts.values())
+        print(f"    {cat}: {counts['bypass']} bypasses / {counts['defended']} defended / {counts['partial']} partial / {counts['error']} error ({total} total)")
+
+    if bypasses:
+        print("\n  🔴 EXPLOITS FOUND (defense bypassed):")
+        for b in bypasses:
+            print(f"    [{b['attack_id']}] {b['category']}/{b['subcategory']} — {b['verdict_reasoning'][:80]}")
+
+    if partials:
+        print("\n  🟡 PARTIAL BYPASSES (mutation candidates):")
+        for p in partials:
+            print(f"    [{p['attack_id']}] {p['category']}/{p['subcategory']} — {p['verdict_reasoning'][:80]}")
+
+    if errors:
+        print("\n  ⚪ TARGET FAILURES (no judgement possible):")
+        for e in errors:
+            print(f"    [{e['attack_id']}] {e['category']}/{e['subcategory']} — {e['verdict_reasoning'][:80]}")
+
+    # Save results
+    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    results_file = os.path.join(RESULTS_DIR, f"attack_results_{timestamp}.json")
+    with open(results_file, "w") as f:
+        json.dump({
+            "timestamp": datetime.utcnow().isoformat(),
+            "target": "https://openemr.146-190-75-148.sslip.io",
+            "total_attacks": len(results),
+            "summary": {
+                "bypass": len(bypasses),
+                "defended": len(defenses),
+                "partial": len(partials),
+                "error": len(errors),
+            },
+            "by_category": categories,
+            "results": results,
+        }, f, indent=2, default=str)
+
+    print(f"\n  Results saved → {results_file}")
+
+    # Also save as latest
+    latest_file = os.path.join(RESULTS_DIR, "latest_results.json")
+    with open(latest_file, "w") as f:
+        json.dump({
+            "timestamp": datetime.utcnow().isoformat(),
+            "total_attacks": len(results),
+            "summary": {
+                "bypass": len(bypasses),
+                "defended": len(defenses),
+                "partial": len(partials),
+                "error": len(errors),
+            },
+            "by_category": categories,
+            "results": results,
+        }, f, indent=2, default=str)
+
+    print("=" * 60)
+    return results
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="Run adversarial attacks against the Clinical Co-Pilot")
+    parser.add_argument("--category", type=str, help="Filter by attack category")
+    parser.add_argument("--id", type=str, help="Run a specific attack by ID")
+    args = parser.parse_args()
+
+    run_attack_suite(category_filter=args.category, id_filter=args.id)
