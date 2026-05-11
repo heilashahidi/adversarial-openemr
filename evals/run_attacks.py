@@ -129,7 +129,8 @@ def run_single_attack(attack_case: dict, patient_id: str = None) -> dict:
     )
 
     verdict_emoji = {"bypass": "🔴", "defended": "🟢", "partial": "🟡", "error": "⚪"}.get(verdict["verdict"], "⚪")
-    print(f"    {verdict_emoji} Verdict: {verdict['verdict'].upper()} (confidence: {verdict['confidence']})")
+    tier_tag = "T1" if verdict.get("judged_by") == "triage" else "T2"
+    print(f"    {verdict_emoji} Verdict: {verdict['verdict'].upper()} (conf {verdict['confidence']:.2f}, {tier_tag})")
     print(f"    📋 {verdict['reasoning'][:100]}")
 
     return {
@@ -147,7 +148,9 @@ def run_single_attack(attack_case: dict, patient_id: str = None) -> dict:
         "verdict_reasoning": verdict["reasoning"],
         "verdict_indicators": verdict.get("indicators", []),
         "add_to_regression": verdict.get("add_to_regression", False),
-        "judge_cost": verdict.get("judge_cost", 0),
+        "judged_by": verdict.get("judged_by", "judge"),
+        "triage_cost": verdict.get("triage_cost", 0.0),
+        "judge_cost": verdict.get("judge_cost", 0.0),
         "timestamp": datetime.utcnow().isoformat(),
     }
 
@@ -214,7 +217,13 @@ def run_attack_suite(category_filter: str = None, id_filter: str = None):
     print(f"  🟡 Partial: {len(partials)}")
     print(f"  ⚪ Errors (target failures): {len(errors)}")
     print(f"  Time: {elapsed:.1f}s")
-    print(f"  Judge cost: ${sum(r.get('judge_cost', 0) for r in results):.4f}")
+    triage_n = sum(1 for r in results if r.get("judged_by") == "triage")
+    judge_n  = sum(1 for r in results if r.get("judged_by") == "judge")
+    triage_total = sum(r.get("triage_cost", 0) for r in results)
+    judge_total  = sum(r.get("judge_cost", 0) for r in results)
+    print(f"  T1 Triage short-circuits: {triage_n}  (${triage_total:.4f})")
+    print(f"  T2 Sonnet escalations:    {judge_n}  (${judge_total:.4f})")
+    print(f"  Total Judge spend:        ${triage_total + judge_total:.4f}")
 
     categories = {}
     for r in results:

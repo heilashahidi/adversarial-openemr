@@ -132,7 +132,11 @@ if page == "Overview":
     summary = results.get("summary", {})
     by_cat = results.get("by_category", {})
     rs = results.get("results", [])
-    judge_cost = sum(r.get("judge_cost", 0) for r in rs)
+    triage_cost = sum(r.get("triage_cost", 0) for r in rs)
+    judge_cost  = sum(r.get("judge_cost",  0) for r in rs)
+    total_cost  = triage_cost + judge_cost
+    triage_n    = sum(1 for r in rs if r.get("judged_by") == "triage")
+    judge_n     = sum(1 for r in rs if r.get("judged_by") == "judge")
 
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Total attacks", results.get("total_attacks", 0))
@@ -141,9 +145,16 @@ if page == "Overview":
     c4.metric("🟡 Partial", summary.get("partial", 0))
     c5.metric("⚪ Errors", summary.get("error", 0))
 
+    if triage_n + judge_n > 0:
+        tc1, tc2, tc3 = st.columns(3)
+        tc1.metric("T1 Triage (Haiku 4.5)", triage_n, delta=f"${triage_cost:.4f}", delta_color="off")
+        tc2.metric("T2 Judge  (Sonnet 4.5)", judge_n, delta=f"${judge_cost:.4f}", delta_color="off")
+        tc3.metric("Total judge spend",     f"${total_cost:.4f}",
+                   delta=f"-{(1 - total_cost / max(0.0001, total_cost + (triage_n * 0.004))) * 100:.0f}% vs Sonnet-only"
+                   if triage_n else None, delta_color="normal")
+
     st.caption(
         f"Last run: `{results.get('timestamp', 'unknown')}` · "
-        f"Judge cost: ${judge_cost:.4f} · "
         f"Source: `evals/results/latest_results.json`"
     )
 
@@ -458,10 +469,12 @@ elif page == "Attack Browser":
         color_tag = VERDICT_COLOR_TAG.get(verdict, "gray")
         confidence = r.get("verdict_confidence", 0.0)
 
+        judged_by = r.get("judged_by", "judge")
+        tier_badge = "🥇 T1" if judged_by == "triage" else "🥈 T2"
         header = (
             f"{emoji} **[{r.get('attack_id')}]** "
             f"`{r.get('category')}/{r.get('subcategory')}` — "
-            f":{color_tag}[**{verdict.upper()}**] (conf {confidence:.2f})"
+            f":{color_tag}[**{verdict.upper()}**] (conf {confidence:.2f}, {tier_badge})"
         )
 
         with st.expander(header):
@@ -471,7 +484,15 @@ elif page == "Attack Browser":
                 st.markdown(f"**Latency:** {r.get('target_latency_ms', 0)} ms")
             with meta_cols[1]:
                 st.markdown(f"**Judge confidence:** {confidence:.2f}")
-                st.markdown(f"**Judge cost:** ${r.get('judge_cost', 0):.5f}")
+                t_cost = r.get("triage_cost", 0.0)
+                j_cost = r.get("judge_cost", 0.0)
+                if t_cost and j_cost:
+                    st.markdown(f"**Cost:** T1 ${t_cost:.5f} + T2 ${j_cost:.5f}")
+                elif t_cost:
+                    st.markdown(f"**Cost:** T1 ${t_cost:.5f} (short-circuited)")
+                else:
+                    st.markdown(f"**Cost:** T2 ${j_cost:.5f}")
+                st.markdown(f"**Judged by:** {judged_by}")
             with meta_cols[2]:
                 st.markdown(f"**Add to regression:** {'yes' if r.get('add_to_regression') else 'no'}")
                 indicators = r.get("verdict_indicators", [])

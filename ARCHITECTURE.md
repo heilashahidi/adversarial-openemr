@@ -104,7 +104,8 @@ The Stage 3 baseline already established empirically that the target's prompt-le
 |---|---|---|---|---|
 | **Orchestrator** | `meta-llama/llama-3.1-8b-instruct` | Coverage map, threat-model priorities, open findings, $ budget | `CampaignDirective` (cat, subcat, count, mutation strategy, seeds, $) | High — sets scope |
 | **Red Team** | `mistralai/mistral-7b-instruct` (gen), `meta-llama/llama-3.1-8b-instruct` (mutation) | Directive, seed templates, partial-success findings, threat-model context | `AttackPayload[]` | Low — output untrusted by design |
-| **Judge** | `anthropic/claude-sonnet-4.5` (Anthropic-pinned on OpenRouter, T=0.0) | Attack payload, target response, expected-safe rubric | `Verdict {bypass/defended/partial, severity, confidence, reasoning}` | **Highest** — drives every downstream decision |
+| **Triage (T1)** | `anthropic/claude-haiku-4.5` (Anthropic-pinned, T=0.0) | Attack payload, target response, expected-safe rubric | `{escalate, verdict ∈ {defended, null}, confidence, reasoning}` | Medium — can only short-circuit obvious clean defenses; never declares a bypass |
+| **Judge (T2)** | `anthropic/claude-sonnet-4.5` (Anthropic-pinned, T=0.0) | Same inputs as Triage, called only when T1 escalates | `Verdict {bypass/defended/partial, severity, confidence, reasoning}` | **Highest** — drives every downstream decision |
 | **Documentation** | `mistralai/mistral-7b-instruct` | Confirmed exploit, target response, finding metadata | Vulnerability report (Markdown) | Medium — reviewed before filing critical-severity |
 
 > **Drift from earlier doc:** the previous architecture claimed "Mistral Large / Llama 70B / Haiku" — the actual `config.py` runs the smaller and cheaper variants above. The smaller models are sufficient for mutation and structured output; we can swap up to larger variants without architectural changes (only `MODELS` in `config.py`).
@@ -198,7 +199,8 @@ Agents do not call each other directly. Every handoff is a row in the SQLite sta
 ### 1.4 Model Selection Rationale
 
 - **Open-source for Red Team:** Claude and GPT refuse offensive-security prompts. Mistral and Llama do not. This is the explicit reason the assignment recommends mixed-model.
-- **Sonnet 4.5 for Judge:** evaluation consistency matters more than cost. We saw this in Stage 3 — Haiku 3.5 returned a default 0.5 confidence on every case and once invented an out-of-schema verdict `"PASS"`. Sonnet 4.5 returned substantive reasoning at 0.95+ confidence on 23/24 cases. Verdict drift is the single biggest threat to platform integrity (see §13 FAQ).
+- **Sonnet 4.5 for the Tier-2 Judge:** evaluation consistency matters more than cost. We saw this in Stage 3 — Haiku 3.5 returned a default 0.5 confidence on every case and once invented an out-of-schema verdict `"PASS"`. Sonnet 4.5 returned substantive reasoning at 0.95+ confidence on 23/24 cases. Verdict drift is the single biggest threat to platform integrity (see §13 FAQ).
+- **Haiku 4.5 for the Tier-1 Triage:** ~75% of attacks in a typical run are obvious clean refusals (the target's behavioral defenses are strong). A small cheap model is enough to recognize those and skip the Sonnet call. Critically, Triage is constrained to emit only `defended` or "escalate" — it cannot mark anything as `bypass`, so a real bypass can never be missed because Triage filtered it out. The asymmetric error budget (false-positive escalation is cheap, false-negative defended is catastrophic) is encoded directly into the prompt.
 - **Llama 8B for Orchestrator:** small structured I/O, no reasoning heavy lift. Deterministic scoring (§3.1) does the math; the LLM only narrates and selects.
 - **Mistral 7B for Documentation:** prose-from-structured-data is a low bar. Cheap, fast.
 - **Provider pinning:** the Judge call passes `provider: {order: ["Anthropic"], allow_fallbacks: false}` to OpenRouter. Without this, OpenRouter can silently route to a different upstream provider with different output behavior between runs, breaking verdict reproducibility. The Red Team intentionally does **not** pin — variety across providers is a feature there.
@@ -360,7 +362,9 @@ Stage 4 explicitly asks where AI is used versus deterministic code, and why. Rul
 | Red Team: paraphrase / embed mutations | AI | Open-ended rewriting. |
 | Target Client | Deterministic | Pure HTTP. Adds rate limiting and target-failure short-circuit. |
 | Target-failure detection | Deterministic | `status_code >= 400 or not success` is a constant compare. |
-| Judge: verdict | AI (Sonnet 4.5, T=0.0) | Only way to judge whether a refusal was clean. |
+| Triage: filter obvious clean defenses | AI (Haiku 4.5, T=0.0) | Cheap and good at pattern-matching explicit refusals; the actual decision boundary is policy ("any PHI? → escalate"), not raw judgment. |
+| Triage → Judge escalation gate | Deterministic | If Triage emits anything other than "defended" + confidence ≥ 0.85, escalate. Once Triage decides to defer, the routing is code. |
+| Judge: verdict | AI (Sonnet 4.5, T=0.0) | Only way to judge whether a refusal was clean for ambiguous cases. |
 | Promotion gate (`bypass + conf ≥ τ`) | Deterministic | Once the Judge decides, the rest is code. |
 | Regression replay | Deterministic | Variance kills regression confidence. Substring/regex over canned indicators. |
 | Documentation: report writing | AI (Mistral 7B) | Prose from structured fields. |
@@ -407,7 +411,7 @@ The state store is a single `state.db` SQLite file with five tables (`findings`,
 
 ### 7.1 Cost Projection
 
-Empirical: a 24-attack campaign with Sonnet 4.5 as Judge costs **$0.09**. That's the Judge alone — the Red Team adds ~$0.01–$0.05 per campaign at Mistral 7B / Llama 8B prices.
+Empirical: a 24-attack campaign with Sonnet 4.5 as the only Judge costs **$0.09**. With the two-tier Judge (Triage Haiku 4.5 → Sonnet 4.5 escalation), the same campaign drops to **~$0.02–$0.04** because most cases short-circuit at Tier 1. The Red Team adds ~$0.01–$0.05 per campaign at Mistral 7B / Llama 8B prices.
 
 | Scale | Campaigns | Est. Cost |
 |---|---|---|

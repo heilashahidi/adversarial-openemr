@@ -68,6 +68,7 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 MODELS = {
     "red_team": os.getenv("RED_TEAM_MODEL", "mistralai/mistral-7b-instruct"),
     "red_team_mutation": os.getenv("MUTATION_MODEL", "meta-llama/llama-3.1-8b-instruct"),
+    "triage": os.getenv("TRIAGE_MODEL", "anthropic/claude-haiku-4.5"),
     "judge": os.getenv("JUDGE_MODEL", "anthropic/claude-sonnet-4.5"),
     "orchestrator": os.getenv("ORCHESTRATOR_MODEL", "meta-llama/llama-3.1-8b-instruct"),
     "documentation": os.getenv("DOCUMENTATION_MODEL", "mistralai/mistral-7b-instruct"),
