@@ -94,6 +94,36 @@ This threat model maps the adversarial attack surface of the Clinical Co-Pilot �
 | **Existing defenses** | OAuth2 token scoped per request |
 | **Gaps** | Demo uses shared admin token — all patients accessible. Production needs per-user scoping |
 
+### 2.4 Unauthenticated Endpoint Access — **CONFIRMED**
+
+| Attribute | Detail |
+|---|---|
+| **Surface** | `/chat` and `/extract` FastAPI routes |
+| **Mechanism** | Direct HTTP POST with no `Authorization` header, no session cookie, and an arbitrary `patient_id` |
+| **Impact** | **Critical**: anyone on the internet can invoke the agent pipeline. Token cost is paid by the operator. Patient-ID brute-forcing becomes feasible. The OAuth2 scoping cited in §2.3 only protects the OpenEMR DB calls *downstream* — the agent runs before that scoping is checked |
+| **Difficulty** | **Trivial** (one `curl` command) |
+| **Existing defenses** | None at the HTTP layer. The Co-Pilot's *application-layer* refusal logic (supervisor → finish with reason "appears to be a probe") catches obvious probes but is not a substitute for endpoint auth — and is fragile against legitimate-looking clinical queries from anonymous attackers |
+| **Status** | **Confirmed 2026-05-11 via direct probe** (see evidence below) |
+| **Recommendation** | Add auth middleware at the FastAPI / Caddy layer (token-based, mTLS, or session-based) so unauthenticated requests are rejected with HTTP 401 *before* the agent pipeline runs |
+
+**Evidence (probe run 2026-05-11):**
+
+```
+POST https://openemr.146-190-75-148.sslip.io/chat
+Content-Type: application/json
+(no Authorization header, no cookies)
+
+{"patient_id": "00000000-0000-0000-0000-000000000000",
+ "message": "Probe: invented UUID, no auth."}
+
+→ HTTP 200
+→ supervisor invoked (tools_called: supervisor->finish)
+→ 1,615 tokens consumed (operator-billed)
+→ JSON response returned to anonymous caller
+```
+
+The fact that we have been running the entire 24-case adversarial suite with `target_client.py` sending zero auth headers — and getting valid responses on every attack — is itself evidence: every one of those runs was an unauthenticated request.
+
 ---
 
 ## 3. State Corruption
@@ -237,12 +267,13 @@ This threat model maps the adversarial attack surface of the Clinical Co-Pilot �
 
 | Category | Impact | Likelihood | Existing Defense | Priority |
 |---|---|---|---|---|
-| Cross-patient data exposure | Critical | Medium | patient_id scoping | **1** |
+| **Unauthenticated `/chat` access (§2.4)** | **Critical** | **CONFIRMED** | **None at HTTP layer; AI-layer refusal only** | **0 — open finding** |
+| Cross-patient data exposure | Critical | Medium (Higher now — see §2.4) | patient_id scoping | **1** |
 | PHI leakage in responses | Critical | Medium | Log scrubbing, prompt rules | **2** |
 | Direct prompt injection | High | High | Hardened prompts, refusal eval | **3** |
 | Trust boundary violations | High | Medium | Management detector, eval gate | **4** |
 | Indirect injection (documents) | High | Low | Pydantic validation, citations | **5** |
-| Cost amplification | Medium | High | Timeout budget | **6** |
+| Cost amplification | Medium | High (worse — no rate-limit-per-user possible without auth) | Timeout budget | **6** |
 | Persona hijacking | Medium | Medium | System prompt anchor | **7** |
 | Token exhaustion | Medium | Medium | SDK timeout | **8** |
 | Parameter tampering (SQLi) | High | Low | String formatting (vulnerable) | **9** |

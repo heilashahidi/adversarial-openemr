@@ -252,6 +252,13 @@ variants the threat model enumerates: encoding bypasses, indirect injection via
 patient data, multi-turn escalation, retrieval-output injection.
             """
         )
+        st.warning(
+            "**Caveat — confirmed §2.4 finding (Critical):** the `/chat` endpoint itself "
+            "accepts unauthenticated requests. Every attack above ran with **no** "
+            "Authorization header. The AI-layer refusals are real, but they are the only "
+            "defense — anyone on the internet can reach the agent and burn the operator's "
+            "token budget. See the Threat Model tab §2.4 for evidence and remediation."
+        )
     else:
         st.error(
             f"**{bypasses} confirmed bypass(es)** — defense broken. "
