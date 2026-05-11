@@ -21,6 +21,16 @@ from target_client import send_attack, send_multi_turn_attack, check_target_heal
 from state_store import add_finding, get_summary, init_db
 from config import DEFAULT_PATIENT, OPENROUTER_API_KEY
 
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        if len(args) == 1 and callable(args[0]):
+            return args[0]
+        def _decorator(fn):
+            return fn
+        return _decorator
+
 # Add agents to path
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "agents"))
 from judge_agent import judge_attack
@@ -32,6 +42,7 @@ RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results"
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 
+@traceable(run_type="chain", name="run_single_attack")
 def run_single_attack(attack_case: dict, patient_id: str = None) -> dict:
     """Execute a single attack and judge the result."""
     attack_id = attack_case["id"]
@@ -141,6 +152,7 @@ def run_single_attack(attack_case: dict, patient_id: str = None) -> dict:
     }
 
 
+@traceable(run_type="chain", name="campaign")
 def run_attack_suite(category_filter: str = None, id_filter: str = None):
     """Run the full seed attack suite or a filtered subset."""
     print("=" * 60)

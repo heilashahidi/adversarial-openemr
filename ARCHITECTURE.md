@@ -469,6 +469,14 @@ The dashboard is a read-only viewer of committed run artifacts (`evals/results/l
 
 This keeps the operator and the grader looking at exactly the same artifacts that the Orchestrator uses internally; there is no separate reporting database that could drift from the state store.
 
+### 8.2 Per-Call Tracing (LangSmith)
+
+Aggregate metrics live in the SQLite store and surface in the dashboard. **Per-call** tracing (every LLM call's full prompt, response, latency, token counts, and cost, plus the parent/child tree across `campaign → run_single_attack → judge_attack → call_llm`) lives in LangSmith.
+
+Wiring: `@traceable` decorators on `call_llm`, `judge_attack`, `run_single_attack`, and `run_attack_suite`. The decorator is a no-op unless `LANGCHAIN_TRACING_V2=true` is set, so the platform runs with or without LangSmith configured. When enabled, every campaign appears as one root run in the project at `smith.langchain.com/projects/p/adversarial-openemr` with all attacks and judge calls as nested children — clickable down to the raw OpenRouter request/response that produced each verdict.
+
+This is the layer humans use to debug a single verdict ("why did the Judge say that?") whereas §8 metrics answer aggregate questions ("is the target getting weaker?"). The two are complementary; neither replaces the other.
+
 ---
 
 ## 9. Vulnerability Report Format

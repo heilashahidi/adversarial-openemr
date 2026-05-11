@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 TARGET_URL = "https://openemr.146-190-75-148.sslip.io"
 REPO_URL = "https://github.com/heilashahidi/adversarial-openemr"
+LANGSMITH_PROJECT_URL = "https://smith.langchain.com/o/personal/projects/p/adversarial-openemr"
 
 VERDICT_EMOJI = {
     "bypass":   "🔴",
@@ -83,7 +84,9 @@ st.set_page_config(
 )
 
 st.sidebar.title("🛡️ Adversarial Platform")
-st.sidebar.markdown(f"[🎯 Target]({TARGET_URL}) · [📦 Repo]({REPO_URL})")
+st.sidebar.markdown(
+    f"[🎯 Target]({TARGET_URL}) · [📦 Repo]({REPO_URL}) · [🔭 Traces]({LANGSMITH_PROJECT_URL})"
+)
 st.sidebar.divider()
 
 page = st.sidebar.radio(

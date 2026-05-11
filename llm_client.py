@@ -8,6 +8,18 @@ import time
 import openai
 from config import OPENROUTER_API_KEY, OPENROUTER_BASE_URL, MODELS, MODEL_COSTS
 
+# LangSmith @traceable becomes a no-op if LANGCHAIN_TRACING_V2 is unset, so the
+# import is safe whether or not the user has configured LangSmith.
+try:
+    from langsmith import traceable
+except ImportError:
+    def traceable(*args, **kwargs):
+        if len(args) == 1 and callable(args[0]):
+            return args[0]
+        def _decorator(fn):
+            return fn
+        return _decorator
+
 
 # Singleton client
 _client = None
@@ -23,6 +35,7 @@ def get_client():
     return _client
 
 
+@traceable(run_type="llm", name="call_llm")
 def call_llm(
     role: str,
     messages: list[dict],
