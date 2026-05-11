@@ -146,7 +146,7 @@ if page == "Overview":
 
     # ── Charts row ──
     st.divider()
-    chart_col1, chart_col2 = st.columns([1, 2])
+    chart_col1, chart_col2 = st.columns(2)
 
     with chart_col1:
         st.markdown("**Verdict mix**")
@@ -160,7 +160,7 @@ if page == "Overview":
         if not verdict_df.empty:
             donut = (
                 alt.Chart(verdict_df)
-                .mark_arc(innerRadius=55, outerRadius=95, stroke="white", strokeWidth=2)
+                .mark_arc(innerRadius=45, outerRadius=80, stroke="white", strokeWidth=2)
                 .encode(
                     theta=alt.Theta("Count:Q"),
                     color=alt.Color(
@@ -174,11 +174,17 @@ if page == "Overview":
                                 VERDICT_COLOR_HEX["Error"],
                             ],
                         ),
-                        legend=alt.Legend(orient="bottom", title=None),
+                        legend=alt.Legend(
+                            orient="bottom",
+                            title=None,
+                            direction="horizontal",
+                            columns=4,
+                        ),
                     ),
                     tooltip=["Verdict", "Count"],
                 )
-                .properties(height=240)
+                .properties(height=280)
+                .configure_view(strokeWidth=0)
             )
             st.altair_chart(donut, use_container_width=True)
 
