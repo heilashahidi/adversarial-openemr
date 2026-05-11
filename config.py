@@ -84,6 +84,48 @@ ATTACK_CATEGORIES = [
     "identity_exploitation",
 ]
 
+# Sub-categories from THREAT_MODEL.md — Orchestrator steers at this granularity
+ATTACK_SUBCATEGORIES = {
+    "prompt_injection": [
+        "direct",
+        "indirect_patient_data",
+        "multi_turn",
+        "tool_output",
+        "encoding",
+        "system_prompt_extraction",
+    ],
+    "data_exfiltration": [
+        "phi_leakage",
+        "cross_patient",
+        "authorization_bypass",
+        "unauthenticated_endpoint",
+        "model_fingerprinting",
+    ],
+    "state_corruption": [
+        "conversation_history",
+        "document_poisoning",
+        "corpus_poisoning",
+        "citation_forgery",
+    ],
+    "tool_misuse": [
+        "unintended_invocation",
+        "parameter_tampering",
+        "recursive_calls",
+        "insecure_output_handling",
+    ],
+    "denial_of_service": [
+        "token_exhaustion",
+        "cost_amplification",
+        "infinite_loops",
+    ],
+    "identity_exploitation": [
+        "privilege_escalation",
+        "persona_hijacking",
+        "trust_boundary",
+        "hypothetical_framing",
+    ],
+}
+
 # ── Campaign Settings ──
 DEFAULT_ATTACKS_PER_CAMPAIGN = 10
 MAX_COST_PER_CAMPAIGN = 5.00  # dollars

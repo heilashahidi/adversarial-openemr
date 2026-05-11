@@ -37,12 +37,14 @@ def init_db():
         );
 
         CREATE TABLE IF NOT EXISTS coverage (
-            category TEXT PRIMARY KEY,
+            category TEXT NOT NULL,
+            subcategory TEXT NOT NULL DEFAULT '',
             total_attacks INTEGER DEFAULT 0,
             successes INTEGER DEFAULT 0,
             failures INTEGER DEFAULT 0,
             partials INTEGER DEFAULT 0,
-            last_tested TEXT DEFAULT ''
+            last_tested TEXT DEFAULT '',
+            PRIMARY KEY (category, subcategory)
         );
 
         CREATE TABLE IF NOT EXISTS exploits (
@@ -91,13 +93,14 @@ def init_db():
         );
     """)
 
-    # Initialize coverage for all categories
-    from config import ATTACK_CATEGORIES
-    for cat in ATTACK_CATEGORIES:
-        conn.execute(
-            "INSERT OR IGNORE INTO coverage (category, total_attacks) VALUES (?, 0)",
-            (cat,)
-        )
+    # Initialize coverage for every (category, subcategory) from the threat model
+    from config import ATTACK_SUBCATEGORIES
+    for cat, subs in ATTACK_SUBCATEGORIES.items():
+        for sub in subs:
+            conn.execute(
+                "INSERT OR IGNORE INTO coverage (category, subcategory, total_attacks) VALUES (?, ?, 0)",
+                (cat, sub)
+            )
 
     conn.commit()
     conn.close()
@@ -149,20 +152,47 @@ def get_partial_successes(category=None):
 
 # ── Coverage ──
 
-def update_coverage(category, verdict):
+def update_coverage(category, subcategory, verdict):
     conn = _get_conn()
     col = {"success": "successes", "fail": "failures", "partial": "partials"}.get(verdict, "failures")
+    # Ensure the row exists even if the Red Team invented a new subcategory not in config
     conn.execute(
-        f"UPDATE coverage SET total_attacks = total_attacks + 1, {col} = {col} + 1, last_tested = ? WHERE category = ?",
-        (datetime.utcnow().isoformat(), category)
+        "INSERT OR IGNORE INTO coverage (category, subcategory, total_attacks) VALUES (?, ?, 0)",
+        (category, subcategory)
+    )
+    conn.execute(
+        f"UPDATE coverage SET total_attacks = total_attacks + 1, {col} = {col} + 1, last_tested = ? "
+        "WHERE category = ? AND subcategory = ?",
+        (datetime.utcnow().isoformat(), category, subcategory)
     )
     conn.commit()
     conn.close()
 
 
 def get_coverage():
+    """Return one row per (category, subcategory), least-tested first."""
     conn = _get_conn()
-    rows = conn.execute("SELECT * FROM coverage ORDER BY total_attacks ASC").fetchall()
+    rows = conn.execute(
+        "SELECT * FROM coverage ORDER BY total_attacks ASC, category, subcategory"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_coverage_by_category():
+    """Aggregate coverage rolled up to the top-level category."""
+    conn = _get_conn()
+    rows = conn.execute(
+        """SELECT category,
+                  SUM(total_attacks) AS total_attacks,
+                  SUM(successes)     AS successes,
+                  SUM(failures)      AS failures,
+                  SUM(partials)      AS partials,
+                  MAX(last_tested)   AS last_tested
+           FROM coverage
+           GROUP BY category
+           ORDER BY total_attacks ASC"""
+    ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
