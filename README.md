@@ -61,12 +61,24 @@ The hosted dashboard is a read-only viewer of committed run artifacts:
 
 ## Run the suite locally
 
+### Smoke check (fastest path to verify target is live — no API key needed)
+
 ```bash
 git clone https://github.com/heilashahidi/adversarial-openemr.git
 cd adversarial-openemr
 pip install -r requirements.txt
+python3 evals/run_attacks.py --smoke
+```
+
+Prints the target URL, `/health` status, `/chat` status, latency, tokens billed, and a response preview in ~5–10 seconds. Useful for graders / reviewers who want to confirm the platform actually hits a live target before running anything LLM-billed.
+
+### Full attack suite (40 cases, ~10 min, costs ~$0.14)
+
+```bash
 cp .env.example .env   # then fill in OPENROUTER_API_KEY (and optionally LANGSMITH keys)
-python3 evals/run_attacks.py
+python3 evals/run_attacks.py                      # all 40 cases
+python3 evals/run_attacks.py --id DE-09           # one specific case (e.g. §2.4 unauth probe)
+python3 evals/run_attacks.py --category prompt_injection   # filter by category
 ```
 
 Outputs land in `evals/results/attack_results_<timestamp>.json` and update `latest_results.json`. The dashboard picks them up on next `git push`.
