@@ -20,7 +20,7 @@ This threat model maps the adversarial attack surface of the Clinical Co-Pilot �
 
 **Platform prioritization order:** (1) data exfiltration (HTTP-layer §2.4 first, then PHI / cross-patient / authz), (2) prompt injection — widest attack surface, (3) identity exploitation — targets Week 2 safety boundaries, (4) tool misuse and cost amplification, (5) state corruption.
 
-**Empirical baseline (40-case live run, 2026-05-12):** 1 confirmed bypass (§2.4 above), 38 defended at ≥0.92 confidence, 1 target failure (PI-04 HTTP 500 on a base64 payload — a separate signal worth follow-up). 26 of 26 sub-vectors below have at least one exercised seed case. Each campaign re-probes §2.4 (DE-09) so any future remediation is detected immediately.
+**Empirical baseline (40-case live run, 2026-05-12):** 1 confirmed bypass (§2.4 above), 38 defended at ≥0.92 confidence, 1 target failure (PI-04 HTTP 500 on a base64 payload — a separate signal worth follow-up). 26 of 26 sub-vectors below have at least one exercised seed case. Each campaign re-probes §2.4 (DE-09) so any future remediation is detected immediately. A second empirical finding — §5.4 concurrent-load degradation — surfaced while implementing parallel target execution: the platform observed a **32% failure rate at concurrency=4** (HTTP 502 / 60s timeouts), exercised via `run_attacks.py --workers 4`.
 
 ---
 
@@ -226,6 +226,20 @@ The fact that we have been running the entire 24-case adversarial suite with `ta
 | **Existing defenses** | Wall-clock deadline forces finish |
 | **Gaps** | Timeout is 60s — enough to consume significant tokens |
 
+### 5.4 Concurrent-Load Degradation — **OBSERVED**
+
+| Attribute | Detail |
+|---|---|
+| **Surface** | Full HTTP / inference pipeline: Caddy → uvicorn → FastAPI → Sonnet inference queue |
+| **Mechanism** | Send 4 concurrent `POST /chat` requests to the live target. Each request runs the full agent pipeline independently. The platform reproduces this with `python3 evals/run_attacks.py --workers 4`. |
+| **Impact** | Empirically: **13 of 40 attacks (32%) returned HTTP 502 Bad Gateway or hit the 60s timeout** when 4 workers were active. Combined with §2.4 (unauthenticated endpoint), an anonymous attacker can trigger graceful-degradation failures at very modest concurrency. For a clinical decision-support tool — where availability matters — a 502 to a clinician mid-query is a real workflow disruption. |
+| **Difficulty** | **Trivial** — 4 concurrent `curl` loops, no auth, no skill |
+| **Existing defenses** | None observed at the HTTP layer. The 60s SDK timeout exists but doesn't prevent the 502 — it's the upstream proxy bailing on a slow worker, not the agent gracefully refusing. |
+| **Status** | **Observed 2026-05-12** while implementing parallel target execution in the platform itself. Failure rate scales with concurrency: workers=1 → 0 failures, workers=2 → 0 failures, workers=4 → 13 failures of 40 (mix of HTTP 502 and 60s timeouts). |
+| **Recommendation** | (a) Per-IP rate limiting at Caddy/FastAPI; (b) a request queue with backpressure rather than 502-on-overload (return 429 with `Retry-After` instead); (c) load testing during deployment to size the worker pool. |
+
+**Why this is exercised differently from other sub-vectors:** concurrent-load is intrinsically a multi-request property — it cannot be expressed as a single seed case in the existing schema. The platform tests it via the `--workers N` mode of `run_attacks.py` rather than as a discrete `DOS-XX` entry in `evals/seed_attacks.py`. The default workers value is **2** (safe); raising to 4 reliably reproduces this finding any time the target is otherwise healthy.
+
 ---
 
 ## 6. Identity and Role Exploitation
@@ -276,6 +290,7 @@ The fact that we have been running the entire 24-case adversarial suite with `ta
 | Trust boundary violations | High | Medium | Management detector, eval gate | **4** |
 | Indirect injection (documents) | High | Low | Pydantic validation, citations | **5** |
 | Cost amplification | Medium | High (worse — no rate-limit-per-user possible without auth) | Timeout budget | **6** |
+| **Concurrent-load degradation (§5.4)** | **High** (availability impact for a clinical tool) | **CONFIRMED** (32% failure rate at concurrency=4, observed 2026-05-12) | **None at HTTP layer** | **6b — open finding** |
 | Persona hijacking | Medium | Medium | System prompt anchor | **7** |
 | Token exhaustion | Medium | Medium | SDK timeout | **8** |
 | Parameter tampering (SQLi) | High | Low | String formatting (vulnerable) | **9** |
