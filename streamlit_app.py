@@ -12,6 +12,7 @@ Deploy: share.streamlit.io → connect GitHub repo → point at streamlit_app.py
 """
 
 import json
+import re
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -19,6 +20,7 @@ from pathlib import Path
 import altair as alt
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -85,6 +87,56 @@ def load_seed_exploitability():
         return {c["id"]: c.get("exploitability", "unknown") for c in SEED_ATTACKS}
     except Exception:
         return {}
+
+
+def render_mermaid(code: str, height: int = 720):
+    """Render a mermaid diagram via the official CDN inside a sandboxed iframe."""
+    html = """
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { margin: 0; padding: 12px; background: white;
+           font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+    .mermaid { display: flex; justify-content: center; }
+    .mermaid svg { max-width: 100%; height: auto; }
+  </style>
+</head>
+<body>
+  <pre class="mermaid">__CODE__</pre>
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs";
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: "default",
+      themeVariables: {
+        fontFamily: '-apple-system, system-ui, sans-serif',
+        primaryColor: '#fef2f2',
+        primaryBorderColor: '#dc2626',
+        lineColor: '#475569',
+      },
+      flowchart: { curve: 'basis', padding: 16, useMaxWidth: true }
+    });
+  </script>
+</body>
+</html>
+""".replace("__CODE__", code)
+    components.html(html, height=height, scrolling=True)
+
+
+def render_markdown_with_mermaid(md_text: str, height: int = 720):
+    """Split markdown at ```mermaid``` fences, render each fence as a real
+    diagram and the surrounding markdown inline."""
+    pattern = re.compile(r"```mermaid\n(.*?)\n```", re.DOTALL)
+    parts = pattern.split(md_text)
+    # split() with a single capture group yields: [text, code, text, code, ..., text]
+    for i, part in enumerate(parts):
+        if i % 2 == 0:
+            if part.strip():
+                st.markdown(part)
+        else:
+            render_mermaid(part, height=height)
 
 
 # ── Page setup ──
@@ -719,5 +771,5 @@ elif page == "Threat Model":
 
 elif page == "Architecture":
     st.title("Platform Architecture")
-    st.caption(f"Full text from [ARCHITECTURE.md]({REPO_URL}/blob/main/ARCHITECTURE.md) — 4-agent design, message schemas, decision algorithms.")
-    st.markdown(load_markdown("ARCHITECTURE.md"))
+    st.caption(f"Full text from [ARCHITECTURE.md]({REPO_URL}/blob/main/ARCHITECTURE.md) — 5-agent design (two-tier Judge), message schemas, decision algorithms.")
+    render_markdown_with_mermaid(load_markdown("ARCHITECTURE.md"), height=760)

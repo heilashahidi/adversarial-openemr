@@ -31,84 +31,49 @@ The Stage 3 baseline has matured: the seed suite now covers all 26 threat-model 
 
 ## 1. Multi-Agent System Architecture
 
-```
-                    ┌──────────────────────────┐
-                    │       ORCHESTRATOR        │
-                    │   (Llama 3.1 8B)          │
-                    │                           │
-                    │   Reads:  coverage map,   │
-                    │          open findings,   │
-                    │          threat-model     │
-                    │          priorities, $   │
-                    │   Writes: CampaignDirective│
-                    └────────────┬──────────────┘
-                                 │
-            ┌────────────────────┼────────────────────┐
-            ▼                    │                    ▼
-   ┌────────────────┐            │           ┌────────────────────┐
-   │  RED TEAM      │            │           │   DOCUMENTATION    │
-   │  (Mistral 7B / │            │           │   (Mistral 7B)     │
-   │   Llama 8B)    │            │           │                    │
-   │                │            │           │   Writes vuln      │
-   │  Reads dir +   │            │           │   reports from     │
-   │  partials +    │            │           │   confirmed        │
-   │  threat model  │            │           │   bypasses         │
-   │                │            │           └─────────▲──────────┘
-   │  Writes        │            │                     │
-   │  AttackPayload │            │                     │
-   └────────┬───────┘            │                     │
-            │                    │                     │
-            ▼                    │                     │
-   ╔════════════════════════════════════════════════════╗
-   ║              TARGET CLIENT (deterministic)          ║
-   ║   HTTP → target → TargetResponse {ok, body, code}   ║
-   ╚════════════════════════╤═══════════════════════════╝
-                            │ status ≥ 400 → verdict="error" (skip judge tier)
-                            │ else ↓
-                            ▼
-                  ┌────────────────────────────┐
-                  │   TIER 1 — TRIAGE          │
-                  │   (Haiku 4.5, T=0.0,       │
-                  │    Anthropic-pinned)       │
-                  │                            │
-                  │   Filter obvious clean     │
-                  │   defenses. CANNOT declare │
-                  │   a bypass — output set is │
-                  │   {defended, escalate}.    │
-                  └─────────────┬──────────────┘
-                                │
-        ~90% clean defense  ◄───┴───►  ~10% escalate
-                │                              │
-                ▼                              ▼
-   ┌──────────────────────┐       ┌──────────────────────────┐
-   │  verdict = defended  │       │   TIER 2 — JUDGE         │
-   │  (Triage's call,     │       │   (Sonnet 4.5, T=0.0,    │
-   │   conf ≥ 0.85)       │       │    Anthropic-pinned)     │
-   └──────────┬───────────┘       │                          │
-              │                   │   Verdict (full schema): │
-              │                   │   bypass / defended /    │
-              │                   │   partial                │
-              │                   └────────────┬─────────────┘
-              │                                │
-              └────────────────┬───────────────┘
-                               ▼
-   ┌──────────────────────────────────────────────────────────┐
-   │                   SHARED STATE STORE                      │
-   │                       (SQLite)                            │
-   │                                                           │
-   │  findings(attack_id, payload, response, verdict, conf)    │
-   │  coverage(category, subcategory, totals, last_tested)     │
-   │  exploits(attack_id, frozen sequence, fixed, validated)   │
-   │  cost_log(agent, model, tokens, $, campaign_id)           │
-   │  campaigns(id, category, status, attacks, total_cost)     │
-   └──┬───────────────────────────────────────────────────────┘
-      │
-      ▼
-   ┌────────────────────┐          ┌──────────────────────┐
-   │  REGRESSION        │          │  TARGET SYSTEM        │
-   │  HARNESS           │          │  (Clinical Co-Pilot)  │
-   │  (deterministic)   │          │  Live deployed URL    │
-   └────────────────────┘          └──────────────────────┘
+```mermaid
+flowchart TD
+    O["<b>Orchestrator</b><br/><i>Llama 3.1 8B</i><br/>reads coverage + findings"]
+    RT["<b>Red Team</b><br/><i>Mistral 7B / Llama 8B</i><br/>generates AttackPayloads"]
+    TC["<b>Target Client</b><br/><i>deterministic HTTP</i>"]
+    TGT[("<b>Clinical Co-Pilot</b><br/><i>live deployed target</i>")]
+    T1["<b>Tier 1 — Triage</b><br/><i>Haiku 4.5</i><br/>output ∈ {defended, escalate}"]
+    T2["<b>Tier 2 — Judge</b><br/><i>Sonnet 4.5</i><br/>verdict ∈ {bypass, defended, partial}"]
+    DOC["<b>Documentation</b><br/><i>Mistral 7B</i><br/>writes vuln reports"]
+    DEF["verdict = defended<br/><i>(Triage's call, conf ≥ 0.85)</i>"]
+    ERR["verdict = error<br/><i>(HTTP ≥ 400 short-circuit)</i>"]
+    SS[("<b>SQLite State Store</b><br/>findings · coverage · exploits<br/>cost_log · campaigns")]
+    RH["<b>Regression Harness</b><br/><i>deterministic replay, no LLM</i>"]
+
+    O ==>|CampaignDirective| RT
+    RT ==>|AttackPayload| TC
+    TC <==>|POST /chat| TGT
+    TC -->|status ≥ 400| ERR
+    TC ==>|HTTP 200| T1
+    T1 ==>|~90% obvious clean| DEF
+    T1 ==>|~10% escalate| T2
+    T2 ==> SS
+    DEF --> SS
+    ERR --> SS
+    SS -.->|coverage feedback| O
+    SS ==>|bypass + conf ≥ τ| RH
+    SS --> DOC
+
+    classDef ai      fill:#fef2f2,stroke:#dc2626,stroke-width:2px,color:#0f172a
+    classDef triage  fill:#fef3c7,stroke:#ca8a04,stroke-width:2px,color:#0f172a
+    classDef judge   fill:#fee2e2,stroke:#dc2626,stroke-width:2.5px,color:#0f172a
+    classDef code    fill:#f8fafc,stroke:#64748b,stroke-dasharray:5 3,color:#0f172a
+    classDef storage fill:#f0fdf4,stroke:#16a34a,stroke-width:2px,color:#0f172a
+    classDef target  fill:#e0e7ff,stroke:#4338ca,stroke-width:2px,color:#0f172a
+    classDef result  fill:#f1f5f9,stroke:#cbd5e1,color:#475569,stroke-dasharray:3 3
+
+    class O,RT,DOC ai
+    class T1 triage
+    class T2 judge
+    class TC,RH code
+    class SS storage
+    class TGT target
+    class DEF,ERR result
 ```
 
 The two-tier Judge pipeline is the load-bearing change from the original four-agent design. **Triage handles ~90% of cases at ~5× lower cost; Judge handles only what Triage flags as ambiguous.** The error-budget asymmetry is structural — Triage's prompt does not include `bypass` as a possible output value, so it cannot accidentally clear a real exploit. False-positive escalations cost a Sonnet call; false-negative defenses would be catastrophic. By design, only Tier 2 can declare a defense broken.
