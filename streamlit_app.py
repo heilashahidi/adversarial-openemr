@@ -95,6 +95,143 @@ st.set_page_config(
     layout="wide",
 )
 
+# ── Global CSS for the modern card aesthetic ──
+st.markdown(
+    """
+<style>
+  /* Typography */
+  html, body, [class*="css"] { font-feature-settings: "cv02","cv03","cv04","cv11"; }
+  h1, h2, h3 { letter-spacing: -0.015em; }
+
+  /* Hero banner */
+  .hero {
+    background: linear-gradient(135deg, #ffffff 0%, #f8fafc 100%);
+    border: 1px solid #e2e8f0;
+    border-radius: 16px;
+    padding: 28px 32px;
+    margin-bottom: 20px;
+    box-shadow: 0 1px 3px rgba(15,23,42,0.04), 0 4px 12px rgba(15,23,42,0.04);
+  }
+  .hero-title {
+    font-size: 1.9rem;
+    font-weight: 700;
+    color: #0f172a;
+    margin: 0 0 4px 0;
+    line-height: 1.15;
+  }
+  .hero-subtitle {
+    font-size: 0.95rem;
+    color: #64748b;
+    margin: 0 0 16px 0;
+  }
+  .hero-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: #dc2626;
+    color: white;
+    padding: 5px 12px;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-decoration: none;
+  }
+  .hero-pill code {
+    background: rgba(255,255,255,0.18);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 0.72rem;
+    color: white;
+  }
+  .hero-meta {
+    margin-top: 14px;
+    font-size: 0.82rem;
+    color: #94a3b8;
+  }
+  .hero-meta b { color: #475569; font-weight: 600; }
+
+  /* Metric card grid */
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+  .mcard {
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-top: 3px solid #94a3b8;
+    border-radius: 12px;
+    padding: 16px 18px;
+    box-shadow: 0 1px 3px rgba(15,23,42,0.05);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  .mcard:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(15,23,42,0.08);
+  }
+  .mcard-total    { border-top-color: #64748b; }
+  .mcard-bypass   { border-top-color: #dc2626; }
+  .mcard-defended { border-top-color: #16a34a; }
+  .mcard-partial  { border-top-color: #ca8a04; }
+  .mcard-error    { border-top-color: #94a3b8; }
+  .mcard .label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #64748b;
+    margin-bottom: 6px;
+  }
+  .mcard .value {
+    font-size: 1.85rem;
+    font-weight: 700;
+    color: #0f172a;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .mcard-bypass   .value { color: #dc2626; }
+  .mcard-defended .value { color: #16a34a; }
+  .mcard-partial  .value { color: #ca8a04; }
+
+  /* Tier-cost strip */
+  .tier-strip {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+  .tcard {
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .tcard .tlabel {
+    font-size: 0.78rem;
+    color: #475569;
+    font-weight: 500;
+  }
+  .tcard .tvalue {
+    font-size: 0.92rem;
+    font-weight: 700;
+    color: #0f172a;
+    font-variant-numeric: tabular-nums;
+  }
+  .tcard.total { background: #fef2f2; border-color: #fecaca; }
+  .tcard.total .tvalue { color: #dc2626; }
+
+  /* Section dividers tighter */
+  div[data-testid="stHorizontalBlock"] { gap: 12px !important; }
+</style>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.sidebar.title("🛡️ Adversarial Platform")
 st.sidebar.markdown(
     f"[🎯 Target]({TARGET_URL}) · [📦 Repo]({REPO_URL}) · [🔭 Traces]({LANGSMITH_PROJECT_URL})"
@@ -123,19 +260,17 @@ seed_exploitability = load_seed_exploitability()
 # ── Page: Overview ──
 
 if page == "Overview":
-    st.title("Adversarial AI Security Platform")
-    st.markdown(
-        f"""
-        <div style="display:inline-block;background:#dc2626;color:white;
-                    padding:4px 14px;border-radius:12px;font-size:0.85em;
-                    font-weight:600;letter-spacing:0.02em;margin-bottom:8px;">
-            🎯 LIVE TARGET · {TARGET_URL.replace("https://", "")}
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
     if not results:
+        st.markdown(
+            f"""
+<div class="hero">
+  <div class="hero-title">Adversarial AI Security Platform</div>
+  <div class="hero-subtitle">Multi-agent evaluation of the Clinical Co-Pilot</div>
+  <a class="hero-pill" href="{TARGET_URL}" target="_blank">🎯 LIVE TARGET <code>{TARGET_URL.replace("https://", "")}</code></a>
+</div>
+            """,
+            unsafe_allow_html=True,
+        )
         st.warning(
             "No run results found at `evals/results/latest_results.json`. "
             "Run the attack suite locally and commit the JSON output to populate this view."
@@ -150,26 +285,60 @@ if page == "Overview":
     total_cost  = triage_cost + judge_cost
     triage_n    = sum(1 for r in rs if r.get("judged_by") == "triage")
     judge_n     = sum(1 for r in rs if r.get("judged_by") == "judge")
+    total       = results.get("total_attacks", 0)
 
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Total attacks", results.get("total_attacks", 0))
-    c2.metric("🔴 Bypasses", summary.get("bypass", 0))
-    c3.metric("🟢 Defended", summary.get("defended", 0))
-    c4.metric("🟡 Partial", summary.get("partial", 0))
-    c5.metric("⚪ Errors", summary.get("error", 0))
-
-    if triage_n + judge_n > 0:
-        tc1, tc2, tc3 = st.columns(3)
-        tc1.metric("T1 Triage (Haiku 4.5)", triage_n, delta=f"${triage_cost:.4f}", delta_color="off")
-        tc2.metric("T2 Judge  (Sonnet 4.5)", judge_n, delta=f"${judge_cost:.4f}", delta_color="off")
-        tc3.metric("Total judge spend",     f"${total_cost:.4f}",
-                   delta=f"-{(1 - total_cost / max(0.0001, total_cost + (triage_n * 0.004))) * 100:.0f}% vs Sonnet-only"
-                   if triage_n else None, delta_color="normal")
-
-    st.caption(
-        f"Last run: `{results.get('timestamp', 'unknown')}` · "
-        f"Source: `evals/results/latest_results.json`"
+    # ── Hero banner ──
+    st.markdown(
+        f"""
+<div class="hero">
+  <div class="hero-title">Adversarial AI Security Platform</div>
+  <div class="hero-subtitle">Multi-agent evaluation of the Clinical Co-Pilot — 26 threat-model sub-vectors, two-tier Judge, live target</div>
+  <a class="hero-pill" href="{TARGET_URL}" target="_blank">🎯 LIVE TARGET <code>{TARGET_URL.replace("https://", "")}</code></a>
+  <div class="hero-meta">
+    Last run · <b>{results.get('timestamp', 'unknown')[:19].replace('T', ' ')} UTC</b>
+    &nbsp;·&nbsp; <b>{total}</b> attacks
+    &nbsp;·&nbsp; total judge spend <b>${total_cost:.4f}</b>
+  </div>
+</div>
+        """,
+        unsafe_allow_html=True,
     )
+
+    # ── Verdict metric cards (5-up) ──
+    st.markdown(
+        f"""
+<div class="card-grid">
+  <div class="mcard mcard-total"><div class="label">Total attacks</div><div class="value">{total}</div></div>
+  <div class="mcard mcard-bypass"><div class="label">🔴 Bypasses</div><div class="value">{summary.get('bypass', 0)}</div></div>
+  <div class="mcard mcard-defended"><div class="label">🟢 Defended</div><div class="value">{summary.get('defended', 0)}</div></div>
+  <div class="mcard mcard-partial"><div class="label">🟡 Partial</div><div class="value">{summary.get('partial', 0)}</div></div>
+  <div class="mcard mcard-error"><div class="label">⚪ Errors</div><div class="value">{summary.get('error', 0)}</div></div>
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ── Tier cost strip ──
+    if triage_n + judge_n > 0:
+        st.markdown(
+            f"""
+<div class="tier-strip">
+  <div class="tcard">
+    <span class="tlabel">🥇 T1 Triage <span style="color:#94a3b8;">· Haiku 4.5</span></span>
+    <span class="tvalue">{triage_n} · ${triage_cost:.4f}</span>
+  </div>
+  <div class="tcard">
+    <span class="tlabel">🥈 T2 Judge <span style="color:#94a3b8;">· Sonnet 4.5</span></span>
+    <span class="tvalue">{judge_n} · ${judge_cost:.4f}</span>
+  </div>
+  <div class="tcard total">
+    <span class="tlabel">Total judge spend</span>
+    <span class="tvalue">${total_cost:.4f}</span>
+  </div>
+</div>
+            """,
+            unsafe_allow_html=True,
+        )
 
     # ── Charts row ──
     st.divider()
