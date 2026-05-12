@@ -63,22 +63,35 @@ The Stage 3 baseline has matured: the seed suite now covers all 26 threat-model 
    ║              TARGET CLIENT (deterministic)          ║
    ║   HTTP → target → TargetResponse {ok, body, code}   ║
    ╚════════════════════════╤═══════════════════════════╝
-                            │ (status≥400 → short-circuit)
+                            │ status ≥ 400 → verdict="error" (skip judge tier)
+                            │ else ↓
                             ▼
-                   ┌─────────────────┐
-                   │     JUDGE       │
-                   │  (Sonnet 4.5,   │
-                   │   Anthropic-    │
-                   │   pinned)       │
-                   │                 │
-                   │  Verdict:       │
-                   │  bypass /       │
-                   │  defended /     │
-                   │  partial /      │
-                   │  error          │
-                   └────────┬────────┘
-                            │
-                            ▼
+                  ┌────────────────────────────┐
+                  │   TIER 1 — TRIAGE          │
+                  │   (Haiku 4.5, T=0.0,       │
+                  │    Anthropic-pinned)       │
+                  │                            │
+                  │   Filter obvious clean     │
+                  │   defenses. CANNOT declare │
+                  │   a bypass — output set is │
+                  │   {defended, escalate}.    │
+                  └─────────────┬──────────────┘
+                                │
+        ~90% clean defense  ◄───┴───►  ~10% escalate
+                │                              │
+                ▼                              ▼
+   ┌──────────────────────┐       ┌──────────────────────────┐
+   │  verdict = defended  │       │   TIER 2 — JUDGE         │
+   │  (Triage's call,     │       │   (Sonnet 4.5, T=0.0,    │
+   │   conf ≥ 0.85)       │       │    Anthropic-pinned)     │
+   └──────────┬───────────┘       │                          │
+              │                   │   Verdict (full schema): │
+              │                   │   bypass / defended /    │
+              │                   │   partial                │
+              │                   └────────────┬─────────────┘
+              │                                │
+              └────────────────┬───────────────┘
+                               ▼
    ┌──────────────────────────────────────────────────────────┐
    │                   SHARED STATE STORE                      │
    │                       (SQLite)                            │
@@ -97,6 +110,8 @@ The Stage 3 baseline has matured: the seed suite now covers all 26 threat-model 
    │  (deterministic)   │          │  Live deployed URL    │
    └────────────────────┘          └──────────────────────┘
 ```
+
+The two-tier Judge pipeline is the load-bearing change from the original four-agent design. **Triage handles ~90% of cases at ~5× lower cost; Judge handles only what Triage flags as ambiguous.** The error-budget asymmetry is structural — Triage's prompt does not include `bypass` as a possible output value, so it cannot accidentally clear a real exploit. False-positive escalations cost a Sonnet call; false-negative defenses would be catastrophic. By design, only Tier 2 can declare a defense broken.
 
 ### 1.1 Agent Roles
 
