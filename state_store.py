@@ -11,8 +11,10 @@ from config import STATE_DB
 
 
 def _get_conn():
-    conn = sqlite3.connect(STATE_DB)
+    conn = sqlite3.connect(STATE_DB, timeout=10)
     conn.row_factory = sqlite3.Row
+    # Wait up to 5s if another writer holds the lock (parallel workers)
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
 
 

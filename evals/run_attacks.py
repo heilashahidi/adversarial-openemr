@@ -12,7 +12,9 @@ import json
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from threading import Lock
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -43,25 +45,33 @@ os.makedirs(RESULTS_DIR, exist_ok=True)
 
 
 @traceable(run_type="chain", name="run_single_attack")
-def run_single_attack(attack_case: dict, patient_id: str = None) -> dict:
-    """Execute a single attack and judge the result."""
+def run_single_attack(attack_case: dict, patient_id: str = None, quiet: bool = False) -> dict:
+    """Execute a single attack and judge the result.
+
+    quiet=True suppresses the per-step prints — use this in parallel mode so
+    output from multiple concurrent workers doesn't interleave on the console.
+    """
+    def _say(msg):
+        if not quiet:
+            print(msg)
+
     attack_id = attack_case["id"]
     category = attack_case["category"]
     subcategory = attack_case.get("subcategory", "")
     expected_safe = attack_case["expected_safe"]
 
-    print(f"\n  [{attack_id}] {category}/{subcategory}")
+    _say(f"\n  [{attack_id}] {category}/{subcategory}")
 
     # Determine patient_id
     pid = patient_id or DEFAULT_PATIENT["id"]
 
     # Handle SQL injection test — use attack as patient_id
     if attack_case.get("attack_as_patient_id"):
-        print(f"    📤 Sending as patient_id parameter...")
+        _say(f"    📤 Sending as patient_id parameter...")
         target_result = send_attack("What are this patient's allergies?", patient_id=attack_case["attack"])
     # Handle multi-turn attacks
     elif attack_case.get("multi_turn"):
-        print(f"    📤 Sending {len(attack_case['attack'])} turns...")
+        _say(f"    📤 Sending {len(attack_case['attack'])} turns...")
         turn_results = send_multi_turn_attack(attack_case["attack"], pid)
         # Combine responses for judging
         combined_response = "\n---\n".join([
@@ -75,7 +85,7 @@ def run_single_attack(attack_case: dict, patient_id: str = None) -> dict:
         }
         attack_payload = "\n".join(attack_case["attack"])
     else:
-        print(f"    📤 Sending attack...")
+        _say(f"    📤 Sending attack...")
         target_result = send_attack(attack_case["attack"], pid)
         attack_payload = attack_case["attack"]
 
@@ -87,8 +97,8 @@ def run_single_attack(attack_case: dict, patient_id: str = None) -> dict:
     target_ok = target_result.get("success", False)
     target_status = target_result.get("status_code", 0)
 
-    print(f"    📥 Response received ({target_latency}ms)")
-    print(f"    📝 Response preview: {target_response[:120]}...")
+    _say(f"    📥 Response received ({target_latency}ms)")
+    _say(f"    📝 Response preview: {target_response[:120]}...")
 
     # Store finding
     add_finding(attack_id, category, subcategory, attack_payload, target_response)
@@ -97,8 +107,8 @@ def run_single_attack(attack_case: dict, patient_id: str = None) -> dict:
     # The judge can't evaluate "HTTP 500: Internal Server Error" against an expected safe behavior.
     if not target_ok or target_status >= 400:
         err = target_result.get("error", f"HTTP {target_status}")
-        print(f"    ⚠️  Target failure: {err}")
-        print(f"    ⏭️  Skipping judge — attack premise cannot be evaluated")
+        _say(f"    ⚠️  Target failure: {err}")
+        _say(f"    ⏭️  Skipping judge — attack premise cannot be evaluated")
         return {
             "attack_id": attack_id,
             "category": category,
@@ -119,7 +129,7 @@ def run_single_attack(attack_case: dict, patient_id: str = None) -> dict:
             "timestamp": datetime.utcnow().isoformat(),
         }
 
-    print(f"    ⚖️  Judging...")
+    _say(f"    ⚖️  Judging...")
     verdict = judge_attack(
         attack_id=attack_id,
         category=category,
@@ -131,8 +141,8 @@ def run_single_attack(attack_case: dict, patient_id: str = None) -> dict:
 
     verdict_emoji = {"bypass": "🔴", "defended": "🟢", "partial": "🟡", "error": "⚪"}.get(verdict["verdict"], "⚪")
     tier_tag = "T1" if verdict.get("judged_by") == "triage" else "T2"
-    print(f"    {verdict_emoji} Verdict: {verdict['verdict'].upper()} (conf {verdict['confidence']:.2f}, {tier_tag})")
-    print(f"    📋 {verdict['reasoning'][:100]}")
+    _say(f"    {verdict_emoji} Verdict: {verdict['verdict'].upper()} (conf {verdict['confidence']:.2f}, {tier_tag})")
+    _say(f"    📋 {verdict['reasoning'][:100]}")
 
     return {
         "attack_id": attack_id,
@@ -158,7 +168,7 @@ def run_single_attack(attack_case: dict, patient_id: str = None) -> dict:
 
 
 @traceable(run_type="chain", name="campaign")
-def run_attack_suite(category_filter: str = None, id_filter: str = None):
+def run_attack_suite(category_filter: str = None, id_filter: str = None, workers: int = 2):
     """Run the full seed attack suite or a filtered subset."""
     print("=" * 60)
     print("  Adversarial Attack Suite — Live Target Execution")
@@ -191,16 +201,51 @@ def run_attack_suite(category_filter: str = None, id_filter: str = None):
         print("  No attacks match the filter.")
         sys.exit(1)
 
-    print(f"  Running {len(attacks)} attacks against live target...\n")
+    workers = max(1, int(workers))
+    mode = f"parallel ({workers} workers)" if workers > 1 else "serial"
+    print(f"  Running {len(attacks)} attacks against live target — {mode}...\n")
 
-    # Execute
     results = []
     start_time = time.time()
 
-    for attack in attacks:
-        result = run_single_attack(attack)
-        results.append(result)
-        time.sleep(1)  # Rate limit — be polite to the target
+    if workers == 1:
+        # Serial path — preserves original verbose progress output
+        for attack in attacks:
+            result = run_single_attack(attack)
+            results.append(result)
+            time.sleep(1)
+    else:
+        # Parallel path — workers run quiet; main thread prints one line per completion
+        attack_order = {a["id"]: i for i, a in enumerate(attacks)}
+        print_lock = Lock()
+        done_n = 0
+
+        verdict_emoji_map = {"bypass": "🔴", "defended": "🟢", "partial": "🟡", "error": "⚪"}
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(run_single_attack, a, None, True) for a in attacks]
+            for fut in as_completed(futures):
+                try:
+                    result = fut.result()
+                except Exception as e:
+                    with print_lock:
+                        print(f"  ❌ worker error: {e}")
+                    continue
+                results.append(result)
+                with print_lock:
+                    done_n += 1
+                    v = result.get("verdict", "error")
+                    em = verdict_emoji_map.get(v, "⚪")
+                    tier = "T1" if result.get("judged_by") == "triage" else ("T2" if result.get("judged_by") == "judge" else "—")
+                    print(
+                        f"  [{done_n:2d}/{len(attacks)}] "
+                        f"{em} {result['attack_id']:7s}  "
+                        f"{result['category']:22s} / {result['subcategory']:30s}  "
+                        f"→ {v.upper():9s} ({tier}, conf {result.get('verdict_confidence', 0.0):.2f})"
+                    )
+
+        # Restore original attack order for deterministic JSON output
+        results.sort(key=lambda r: attack_order.get(r["attack_id"], 9999))
 
     elapsed = time.time() - start_time
 
@@ -369,6 +414,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run adversarial attacks against the Clinical Co-Pilot")
     parser.add_argument("--category", type=str, help="Filter by attack category")
     parser.add_argument("--id", type=str, help="Run a specific attack by ID")
+    parser.add_argument("--workers", type=int, default=2,
+                        help="Concurrent attack workers. Default 2 — empirically the target returns "
+                             "HTTP 502/timeouts at workers=4. Use 1 for guaranteed-clean serial execution.")
     parser.add_argument("--smoke", action="store_true",
                         help="Lightweight reachability probe — hits /health and /chat against the live target. "
                              "No LLM calls, no OpenRouter key needed. For graders to verify target is live in ~5s.")
@@ -377,4 +425,4 @@ if __name__ == "__main__":
     if args.smoke:
         run_smoke_check()
     else:
-        run_attack_suite(category_filter=args.category, id_filter=args.id)
+        run_attack_suite(category_filter=args.category, id_filter=args.id, workers=args.workers)
