@@ -75,6 +75,18 @@ def load_subcategories():
         return [], {}
 
 
+@st.cache_data
+def load_seed_exploitability():
+    """Map attack_id → exploitability, read from the seed file as a fallback
+    for results JSON files that pre-date the field."""
+    try:
+        sys.path.insert(0, str(Path(__file__).parent / "evals"))
+        from seed_attacks import SEED_ATTACKS
+        return {c["id"]: c.get("exploitability", "unknown") for c in SEED_ATTACKS}
+    except Exception:
+        return {}
+
+
 # ── Page setup ──
 
 st.set_page_config(
@@ -105,6 +117,7 @@ st.sidebar.caption(
 
 results = load_results()
 categories, subcategories = load_subcategories()
+seed_exploitability = load_seed_exploitability()
 
 
 # ── Page: Overview ──
@@ -481,6 +494,8 @@ elif page == "Attack Browser":
             meta_cols = st.columns(3)
             with meta_cols[0]:
                 st.markdown(f"**Severity:** {r.get('severity', '?')}")
+                expl = r.get("exploitability") or seed_exploitability.get(r.get("attack_id"), "?")
+                st.markdown(f"**Exploitability:** {expl}")
                 st.markdown(f"**Latency:** {r.get('target_latency_ms', 0)} ms")
             with meta_cols[1]:
                 st.markdown(f"**Judge confidence:** {confidence:.2f}")
