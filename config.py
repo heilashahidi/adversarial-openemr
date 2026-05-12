@@ -44,18 +44,6 @@ PATIENTS = {
         "conditions": ["headaches"],
         "pid": 7,
     },
-    "margaret_chen": {
-        "id": "",  # W2 patient — UUID may differ per deployment
-        "name": "Margaret Chen",
-        "conditions": ["hyperlipidemia", "fatigue"],
-        "pid": 10,
-    },
-    "sofia_reyes": {
-        "id": "",
-        "name": "Sofia Reyes",
-        "conditions": ["diabetes", "depression"],
-        "pid": 12,
-    },
 }
 
 # Default patient for attacks

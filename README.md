@@ -25,18 +25,43 @@ Every attack the platform produces is sent to that URL — there is **no mock ta
 
 ### Target state and changes made for testability
 
-The Clinical Co-Pilot is the unmodified deployment from the Weeks 1–2 case study, hosted on DigitalOcean. **No platform-side changes to the target were required to bring it into a testable state.** Concretely:
+The Clinical Co-Pilot is the unmodified deployment from the Weeks 1–2 case study, hosted on DigitalOcean. **No platform-side changes to the target were required to bring it into a testable state for Week 3.** The Week 1–2 deliverables (deployment, DNS, TLS, agent pipeline, test-data seeding) produced a system that was already adversary-ready when Week 3 began.
+
+#### What Weeks 1–2 set up (target side)
 
 | Aspect | State |
 |---|---|
-| **Deployment** | DigitalOcean droplet, reachable via Caddy → uvicorn → FastAPI (`server: uvicorn · via: 1.1 Caddy`). Same hosting as Weeks 1-2. |
-| **Endpoints** | `/chat` (agent pipeline: supervisor → chart_lookup / evidence_retriever / synthesis), `/extract` (VLM), `/health`. All reachable. |
-| **Test patients** | Pre-seeded with known UUIDs in OpenEMR. The platform pins `config.DEFAULT_PATIENT` to David Nakamura (multi-comorbid case); all 6 known patients are in `config.PATIENTS`. |
-| **Co-Pilot model** | Anthropic Sonnet (target-side), invoked by the synthesis worker. Unchanged from Weeks 1-2. |
-| **Auth posture** | **`/chat` accepts unauthenticated requests** — confirmed via direct probe on 2026-05-11. Documented as a Critical finding in `THREAT_MODEL.md` §2.4. This was discovered *because of* the platform, not introduced by it. |
-| **Rate limits** | None observed at the application layer. Platform self-rate-limits at 1 rps for politeness. |
+| **Hosting** | DigitalOcean droplet, public IPv4 routed via [sslip.io](https://sslip.io) (`openemr.146-190-75-148.sslip.io`) for HTTPS without buying a domain. |
+| **HTTP stack** | Caddy (TLS termination, Let's Encrypt) → uvicorn (ASGI) → FastAPI (Python). Response headers show `server: uvicorn · via: 1.1 Caddy`. |
+| **Agent pipeline** | `/chat` runs supervisor → `chart_lookup` (SQL over OpenEMR) → `evidence_retriever` (clinical-guideline RAG) → `synthesis` (Sonnet) → cited response. `/extract` is a VLM document-ingestion endpoint. `/health` returns `{"status":"ok"}`. |
+| **Target LLM** | Anthropic Claude Sonnet, invoked by the synthesis worker. Output includes `citations[]`, `claims[]`, `tools_called[]`, `tokens_used{}`. |
+| **OpenEMR backend** | MySQL with seeded patient records — David Nakamura, Angela Washington, Sarah Smith, Emily Chen — accessible via the OAuth2-scoped FHIR/REST surface that `chart_lookup` uses internally. |
+| **Test patients with known UUIDs** | Four patients pre-seeded with stable UUIDs in `config.PATIENTS`. The platform pins `DEFAULT_PATIENT` to David Nakamura (multi-comorbid: diabetes, heart failure, CKD, AFib, neuropathy) so cross-patient and PHI-leakage attacks have a realistic surface to probe. |
 
-The unauth posture (§2.4) is the only material environmental fact discovered while bringing the system into a testable state. It is not a change we made — it is a property of the existing deployment.
+#### What Week 3 (this platform) added — and did not add
+
+**Added** (platform side only):
+- `target_client.py` — an HTTP wrapper that sends adversarial payloads to `/chat` with the right shape, and short-circuits on `5xx`/timeout.
+- `evals/seed_attacks.py` — 40 adversarial test cases.
+- `agents/triage_agent.py` + `agents/judge_agent.py` — the two-tier Judge.
+- `state_store.py` — SQLite for findings, coverage, exploits, cost.
+- The Streamlit dashboard for human observability.
+
+**Not added** (target side):
+- No code changes to the Co-Pilot itself.
+- No new endpoints.
+- No test fixtures, stubs, or proxy layers between the platform and the target.
+- No auth bypass shims (the auth posture below is the *existing* one, not one we created).
+
+#### Environmental facts discovered while bringing the system into a testable state
+
+| Aspect | State |
+|---|---|
+| **Auth posture** | **`/chat` accepts unauthenticated requests** — confirmed via direct probe on 2026-05-11. Documented as a Critical finding in `THREAT_MODEL.md` §2.4. This was *discovered* by the platform, not introduced by it; `target_client.py` sends no Authorization header by default and the target responds normally. |
+| **Concurrent-load tolerance** | At 4 concurrent attack workers, the target returns HTTP 502 / 60s timeouts on ~32% of requests. Documented as `THREAT_MODEL.md` §5.4. The platform self-throttles to 2 workers by default. |
+| **Rate limits** | None observed at the application layer. The platform self-rate-limits at 1 rps per worker for politeness. |
+
+These two findings are *properties of the existing deployment*, not changes we made — they would be present whether or not the adversarial platform existed.
 
 ## What this platform does
 
