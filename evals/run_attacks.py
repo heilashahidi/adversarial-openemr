@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from target_client import send_attack, send_multi_turn_attack, check_target_health
 from state_store import add_finding, get_summary, init_db
-from config import DEFAULT_PATIENT, OPENROUTER_API_KEY
+from config import DEFAULT_PATIENT, OPENROUTER_API_KEY, TARGET_BASE_URL
 
 try:
     from langsmith import traceable
@@ -305,7 +305,7 @@ def run_attack_suite(category_filter: str = None, id_filter: str = None, workers
     with open(results_file, "w") as f:
         json.dump({
             "timestamp": datetime.utcnow().isoformat(),
-            "target": "https://openemr.146-190-75-148.sslip.io",
+            "target": TARGET_BASE_URL,
             "total_attacks": len(results),
             "summary": {
                 "bypass": len(bypasses),

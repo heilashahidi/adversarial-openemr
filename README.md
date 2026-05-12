@@ -63,6 +63,26 @@ The Clinical Co-Pilot is the unmodified deployment from the Weeks 1–2 case stu
 
 These two findings are *properties of the existing deployment*, not changes we made — they would be present whether or not the adversarial platform existed.
 
+### Running the target locally (Weeks 1-2 setup)
+
+The adversarial platform also runs against a local Clinical Co-Pilot instance, not just the public deployment. The Weeks 1-2 case-study setup produces a target reachable at `http://localhost:8000` — same FastAPI app, same agent pipeline, same Sonnet synthesis worker, same `/chat` `/extract` `/health` endpoints. To point the platform at it instead of the deployed instance, override the target URL via env var:
+
+```bash
+# Run the Co-Pilot locally per the Weeks 1-2 case study
+# (OpenEMR + uvicorn + FastAPI on localhost — see Weeks 1-2 deliverables)
+
+# Point the platform at it
+export TARGET_BASE_URL=http://localhost:8000
+
+# Verify reachability
+python3 evals/run_attacks.py --smoke
+
+# Run the full suite against the local target
+python3 evals/run_attacks.py --workers 1
+```
+
+`config.TARGET_BASE_URL` reads from `TARGET_BASE_URL` env var with the deployed URL as the default fallback, so nothing else in the platform needs to change. Every commit's results JSON records the URL hit so local vs deployed runs are distinguishable in the dashboard's run history.
+
 ## What this platform does
 
 Four-stage W3 deliverable:
