@@ -152,6 +152,8 @@ def run_single_attack(attack_case: dict, patient_id: str = None, quiet: bool = F
         "subcategory": subcategory,
         "severity": attack_case.get("severity", "medium"),
         "exploitability": attack_case.get("exploitability", "unknown"),
+        "threat_model_ref": attack_case.get("threat_model_ref", ""),
+        "regression_candidate": attack_case.get("regression_candidate", True),
         "attack_payload": attack_payload if not attack_case.get("multi_turn") else attack_case["attack"],
         "target_response": target_response,
         "target_latency_ms": target_latency,
@@ -326,6 +328,7 @@ def run_attack_suite(category_filter: str = None, id_filter: str = None, workers
     with open(latest_file, "w") as f:
         json.dump({
             "timestamp": datetime.utcnow().isoformat(),
+            "target": TARGET_BASE_URL,
             "total_attacks": len(results),
             "summary": {
                 "bypass": len(bypasses),
