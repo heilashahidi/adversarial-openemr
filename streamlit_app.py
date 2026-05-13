@@ -777,16 +777,25 @@ elif page == "Exploits":
     )
 
     import sqlite3
+    exploit_rows = []
     try:
         conn = sqlite3.connect("state.db", timeout=5)
         conn.row_factory = sqlite3.Row
-        exploit_rows = [dict(r) for r in conn.execute(
-            "SELECT * FROM exploits ORDER BY confirmed_at DESC"
-        ).fetchall()]
+        # Treat "table doesn't exist yet" as 0 rows (normal on a fresh deploy,
+        # since state.db is gitignored and built at runtime by run_attacks.py).
+        has_exploits = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='exploits'"
+        ).fetchone() is not None
+        if has_exploits:
+            exploit_rows = [dict(r) for r in conn.execute(
+                "SELECT * FROM exploits ORDER BY confirmed_at DESC"
+            ).fetchall()]
         conn.close()
+    except sqlite3.OperationalError:
+        # Real DB error (locked, corrupt) — silent here; JSON fallback below covers it.
+        pass
     except Exception as e:
         st.warning(f"Could not read state.db: {e}")
-        exploit_rows = []
 
     # ── Fallback: re-derive from committed result JSONs ──
     # state.db is gitignored so deployed copies of the dashboard start empty.
@@ -1085,20 +1094,31 @@ elif page == "Agent Activity":
     )
 
     import sqlite3
+    cost_rows = []
+    reg_rows = []
     try:
         conn = sqlite3.connect("state.db", timeout=5)
         conn.row_factory = sqlite3.Row
-        cost_rows = conn.execute(
-            "SELECT * FROM cost_log ORDER BY id DESC LIMIT 200"
-        ).fetchall()
-        reg_rows = conn.execute(
-            "SELECT * FROM regression_runs ORDER BY id DESC LIMIT 50"
-        ).fetchall()
+        # Treat missing tables as 0 rows — state.db is gitignored so a fresh
+        # deploy has no schema until run_attacks.py creates it.
+        existing = {
+            row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if "cost_log" in existing:
+            cost_rows = conn.execute(
+                "SELECT * FROM cost_log ORDER BY id DESC LIMIT 200"
+            ).fetchall()
+        if "regression_runs" in existing:
+            reg_rows = conn.execute(
+                "SELECT * FROM regression_runs ORDER BY id DESC LIMIT 50"
+            ).fetchall()
         conn.close()
+    except sqlite3.OperationalError:
+        pass
     except Exception as e:
         st.warning(f"Could not read state.db: {e}")
-        cost_rows = []
-        reg_rows = []
 
     if not cost_rows:
         st.info("No agent activity in state.db yet — run a campaign to populate `cost_log`.")
