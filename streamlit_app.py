@@ -1093,6 +1093,22 @@ elif page == "Agent Activity":
         "project (operator-only)."
     )
 
+    # ── Build-environment diagnostic ──
+    # Quick proof of what's deployed: cwd, files visible, file count. If the
+    # synthesized fallback fails silently this strip surfaces why.
+    _cwd = Path.cwd()
+    _results_dir = Path("evals/results")
+    _json_files = sorted(_results_dir.glob("attack_results_*.json"))
+    with st.expander("Build diagnostic (click to expand)", expanded=False):
+        st.code(
+            f"cwd:                  {_cwd}\n"
+            f"evals/results exists: {_results_dir.exists()}\n"
+            f"result JSON files:    {len(_json_files)}\n"
+            f"first 3:              {[f.name for f in _json_files[:3]]}\n"
+            f"streamlit_app.py mtime: {Path('streamlit_app.py').stat().st_mtime if Path('streamlit_app.py').exists() else 'n/a'}",
+            language="text",
+        )
+
     import sqlite3
     cost_rows = []
     reg_rows = []
