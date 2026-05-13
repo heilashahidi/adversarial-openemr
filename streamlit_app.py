@@ -717,6 +717,9 @@ elif page == "Attack Browser":
                 st.markdown(f"**Severity:** {r.get('severity', '?')}")
                 expl = r.get("exploitability") or seed_exploitability.get(r.get("attack_id"), "?")
                 st.markdown(f"**Exploitability:** {expl}")
+                tm_ref = r.get("threat_model_ref") or ""
+                if tm_ref:
+                    st.markdown(f"**Threat model:** [{tm_ref}]({REPO_URL}/blob/main/THREAT_MODEL.md)")
                 st.markdown(f"**Latency:** {r.get('target_latency_ms', 0)} ms")
             with meta_cols[1]:
                 st.markdown(f"**Judge confidence:** {confidence:.2f}")
