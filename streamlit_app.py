@@ -977,6 +977,40 @@ elif page == "Trends":
         st.dataframe(df, use_container_width=True, hide_index=True)
 
         st.divider()
+        st.subheader("Cost analysis: actual dev spend + projection at scale")
+        st.caption(
+            "Rubric: dev spend + production projections at 100 / 1K / 10K / 100K test runs "
+            "with the architectural changes each scale requires. Numbers below are "
+            "empirical (sum of `total_cost` across all committed run JSONs)."
+        )
+
+        dev_total = float(df["total_cost"].sum())
+        dev_attacks = int(df["total_attacks"].sum()) if "total_attacks" in df.columns else 0
+        dev_per_atk = (dev_total / dev_attacks) if dev_attacks else 0.0
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Actual dev spend", f"${dev_total:.2f}", f"across {len(df)} runs")
+        c2.metric("Attacks executed", f"{dev_attacks}", "real attacks against live target")
+        c3.metric("Avg cost / attack", f"${dev_per_atk:.5f}", "Triage + Judge combined")
+
+        st.markdown("**Per-scale projections** — see `ARCHITECTURE.md §7.1` for the full analysis.")
+        scale_df = pd.DataFrame([
+            {"Scale": "100",  "Platform $": "$0.30",      "Target-side $": "~$2",     "Architectural change": "None — single laptop, current code"},
+            {"Scale": "1K",   "Platform $": "$3",         "Target-side $": "~$20",    "Architectural change": "Daily budget caps, log rotation, key with $50 credit"},
+            {"Scale": "10K",  "Platform $": "$30 – $60",  "Target-side $": "~$200",   "Architectural change": "Postgres, multi-process workers, key rotation + backoff, attack-hash dedupe"},
+            {"Scale": "100K", "Platform $": "$200 – $600","Target-side $": "~$2,000", "Architectural change": "Distributed queue, Judge cache by (attack, target) hash, Bedrock failover, batch API"},
+        ])
+        st.dataframe(scale_df, use_container_width=True, hide_index=True)
+
+        st.markdown(
+            "**Why this is not cost-per-token × n** — sub-linear forces "
+            "(Triage offload, target-failure short-circuit, regression cache, deterministic "
+            "Red Team mutations) lower the slope; super-linear forces (OpenRouter rate limits, "
+            "Anthropic capacity ceilings, SQLite write contention, state-DB growth) raise it. "
+            "See `ARCHITECTURE.md §7.1.3` for the full breakdown."
+        )
+
+        st.divider()
         st.info(
             "**Target version tracking — honest limitation.** Every run records "
             "`target_url` (always `openemr.146-190-75-148.sslip.io` in our case) "

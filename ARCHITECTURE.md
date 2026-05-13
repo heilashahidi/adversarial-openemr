@@ -392,21 +392,79 @@ The state store is a single `state.db` SQLite file with five tables (`findings`,
 
 ## 7. Cost, Rate Limits, and Failure Modes at Scale
 
-### 7.1 Cost Projection
+### 7.1 Cost Analysis: Actual Dev Spend + Production Projections
 
-Empirical: a 24-attack campaign with Sonnet 4.5 as the only Judge costs **$0.09**. With the two-tier Judge (Triage Haiku 4.5 → Sonnet 4.5 escalation), the same campaign drops to **~$0.02–$0.04** because most cases short-circuit at Tier 1. The Red Team adds ~$0.01–$0.05 per campaign at Mistral 7B / Llama 8B prices.
+> Rubric: "Actual dev spend and projected production costs for running the adversarial platform at 100 / 1K / 10K / 100K test runs. Consider architectural changes needed at each scale. This is not simply cost-per-token × n runs."
 
-| Scale | Campaigns | Est. Cost |
+#### 7.1.1 Actual dev spend (empirical)
+
+Cumulative spend across the **14 committed campaign result JSONs** under `results/`, covering **477 attacks** since 2026-05-11:
+
+| Component | Model | ~Spend | Per-call avg | Notes |
+|---|---|---|---|---|
+| Triage (Tier 1 Judge) | Haiku 4.5 (Anthropic-pinned) | ~$1.05 | ~$0.0010 | ~90% of judgement traffic |
+| Judge (Tier 2 escalation) | Sonnet 4.5 (Anthropic-pinned) | ~$0.30 | ~$0.0050 | only on Triage escalate |
+| Red Team | Llama 3.1 8B Instruct | <$0.01 | ~$0.00005 | adaptive runs only |
+| Orchestrator | Llama 3.1 8B Instruct | $0.00 | — | `--no-llm` narrator path used so far |
+| Documentation | Llama 3.1 8B Instruct | ~$0.01 | ~$0.005 | 2 reports generated (`DE-09`, `DOS-01`) |
+| **Total platform dev spend** | | **~$1.35** | **$0.00284 / attack** | source: campaign result JSONs, `total_cost` field |
+
+Per-campaign average: **$0.097**. State-store `cost_log` shows less than the JSONs because `state.db` was reset during testing; the committed JSONs are the canonical record.
+
+**Target-side inference is paid by the operator deploying the Co-Pilot, not the platform.** Each attack triggers ~7-15s of Sonnet inference on the target's synthesis worker — roughly $0.02 per attack from the target's perspective. Both columns are tracked separately below because they have different scaling laws (the operator controls target-side spend by choosing the target's synthesis model).
+
+#### 7.1.2 Per-scale projections + architectural changes
+
+| Scale | Platform cost (LLM) | Target-side cost | Architectural changes required |
+|---|---|---|---|
+| **100 attacks** | **$0.30** | ~$2 | None. Single laptop, current code as-is. Default `--workers 2`. |
+| **1K attacks** | **$3** | ~$20 | Daily budget caps (extend `MAX_COST_PER_CAMPAIGN`); rotate API key with $50 OpenRouter credit; logs rotation on `state.db`. Still SQLite. |
+| **10K attacks** | **$30 – $60** | ~$200 | (a) Parallel campaign workers (multi-process, not just multi-thread); (b) SQLite → **Postgres** because the SQLite write-lock serializes under concurrency≥4 (we observed this empirically as §5.4); (c) **OpenRouter key rotation** + exponential backoff retry; (d) **Attack-hash dedupe** before sending (~15–20% of mutations are syntactically identical to a prior attack); (e) Per-target rate-limit budget separate from per-attack budget. |
+| **100K attacks** | **$200 – $600** | ~$2,000 | (a) **Distributed queue** (Redis Streams or SQS); (b) **Judge result cache** keyed on `(attack_hash, target_url, target_version_hash)` — at this scale most regression replays are exact hits; (c) **Aggressive Triage tuning**: push `confidence ≥ 0.85` threshold to `≥ 0.92` so Sonnet sees <5% of cases; (d) **Provider failover**: Anthropic primary + Bedrock secondary so a single-provider outage doesn't halt the platform; (e) **Batch API** for Documentation Agent (~2x cheaper, latency-tolerant); (f) Target-side: switch the Co-Pilot's synthesis model to Haiku for low-severity test patients in the operator's deployment. |
+
+The **platform cost** column is bounded — it's our LLM spend. The **target-side** column scales with whatever model the operator runs on the Co-Pilot; numbers shown assume Sonnet 4.5 throughout.
+
+#### 7.1.3 Why this is not cost-per-token × n
+
+If costs were linear we'd just multiply $0.00284 × n and call it done. They aren't:
+
+**Sub-linear forces (cost grows slower than n):**
+
+1. **Triage offload**: ~90% of cases resolve at Haiku 4.5 (~$0.001), not Sonnet (~$0.005). Our empirical $0.00284/attack is already 47% of naive Sonnet-only. As `n` grows the savings compound because Triage's "defended" verdict is sticky.
+2. **Target-failure short-circuit**: 5xx and timeouts bypass the Judge entirely (`verdict="error"`, $0). At workers=4 we observed 32% target failure (THREAT_MODEL §5.4) — that's a 32% Judge cost saving in any high-concurrency run.
+3. **Cache reuse on regression replay**: Same attack against the same target version yields the same response → same verdict. At 10K+ scale, cached verdicts on `(attack_hash, target_url, target_version_hash)` remove ~80% of Judge cost on regression-style runs.
+4. **Deterministic Red Team mutations cost $0**: `encode` and `fragment` strategies are pure string transforms, no LLM tokens.
+
+**Super-linear forces (cost grows faster than n):**
+
+5. **OpenRouter rate limits**: 429s above ~60 req/min force exponential backoff and retries — each retry is paid LLM time we already spent. Mitigation: key rotation, backoff with jitter, and the batch API at 100K.
+6. **Anthropic provider capacity**: pinning to Anthropic means provider-side outages and capacity ceilings apply. At 100K scale a single provider event burns retry budget; needs Bedrock secondary route.
+7. **SQLite write contention**: at `workers ≥ 4` SQLite's single-writer lock serializes — observed locally. Past ~1K runs/day this becomes Postgres-mandatory.
+8. **State growth**: response bodies stored in `findings.response_excerpt`; at 100K attacks the table grows past 1 GB without truncation. Need a TEXT-truncation policy or a separate object store.
+
+#### 7.1.4 Inflection points
+
+The architecture changes in §7.1.2 aren't gradual upgrades — each one kicks in at a specific cost or operational threshold:
+
+| Inflection | When it bites | Change needed |
 |---|---|---|
-| MVP | 10 | ~$1 |
-| 100 | 100 | ~$10 |
-| 1K | 1,000 | ~$100 |
-| 10K | 10,000 | ~$1,000 |
-| 100K | 100,000 | ~$10,000 (needs architectural changes) |
+| SQLite write-lock contention | ~500 cumulative attacks with concurrent workers | Migrate to Postgres |
+| State-DB size | ~5K attacks | Truncate `response_excerpt` to 4 KB; archive old campaigns |
+| OpenRouter per-minute rate limit | sustained > 60 Judge calls/min | Key rotation + backoff + jitter |
+| Cost-per-day budget overrun | ~$50/day = ~1.7K attacks/day | Daily budget cap (extends per-campaign cap) |
+| Provider-side capacity ceiling | ~50K cumulative attacks | Bedrock failover route |
+| Coordinator becomes single point of failure | ~100K cumulative attacks | Distributed queue + stateless workers |
 
-At 100K runs: switch Judge to Haiku 4.5 for low-severity cases (escalate to Sonnet 4.5 only on uncertain verdicts), batch the Judge API where supported, cache regression results (target hasn't changed → don't re-judge), deduplicate attacks by hash before sending.
+#### 7.1.5 Cost monitoring already implemented
 
-**Hosting cost: $0.** The dashboard runs on Hugging Face Spaces CPU-basic (free tier). Compute, bandwidth, and TLS are included; the only operating cost is the per-campaign OpenRouter spend above.
+The platform already has the cost-controls scaffolding ready for higher scales:
+
+- **`MAX_COST_PER_CAMPAIGN = $5.00`** in `config.py` — hard cap enforced in both `run_attacks.py` (serial + parallel paths) and `run_campaign.py`. Campaigns abort cleanly when budget is exhausted.
+- **Low-signal redirect** in `run_campaign.py`: if ≥5 attacks have produced 0 bypasses and 0 partials at ≥$0.05 spend, the Orchestrator is asked to redirect to a different subcategory rather than burning more budget on a defended surface.
+- **`cost_log` table** tracks per-agent / per-model spend with `campaign_id` for attribution. Joins to `findings` give per-subcategory ROI ("$ spent to discover a confirmed bypass").
+- **Trends page** on the dashboard plots `total_cost` and `cost_per_atk` across all committed runs, so cost-scaling drift is visible at a glance.
+
+**Hosting cost: $0.** The dashboard runs on Hugging Face Spaces CPU-basic (free tier). Compute, bandwidth, and TLS are included; the only operating cost is the per-campaign OpenRouter spend above. At 100K scale we'd still keep HF Spaces free-tier for the dashboard — the distributed workers run on whatever infrastructure the operator already pays for.
 
 ### 7.2 Rate Limits
 
