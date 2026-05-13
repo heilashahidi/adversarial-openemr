@@ -1239,7 +1239,33 @@ elif page == "Agent Activity":
         st.divider()
         st.subheader("Regression Harness — last 50 replays")
         st.caption("Deterministic, no LLM. One row per (regression batch × exploit).")
+
+        # ── Fallback: load regression replays from committed JSON exports ──
+        # When state.db has no regression_runs (deploy scenario), look for
+        # files saved via `agents/regression_harness.py --save <path>`.
+        reg_source = "state.db"
+        if not reg_rows:
+            json_reg = []
+            for jf in sorted(Path("evals/results").glob("regression_*.json")):
+                try:
+                    d = json.loads(jf.read_text())
+                except Exception:
+                    continue
+                for r in d.get("results", []):
+                    json_reg.append(r)
+            # Newest first
+            json_reg.sort(key=lambda r: r.get("replayed_at") or "", reverse=True)
+            reg_rows = json_reg[:50]
+            if reg_rows:
+                reg_source = "committed regression JSONs"
+
         if reg_rows:
+            if reg_source == "committed regression JSONs":
+                st.caption(
+                    f"`state.db` has no regression_runs on this deployment — showing "
+                    f"**{len(reg_rows)} replays** from committed `evals/results/regression_*.json` "
+                    f"files (saved with `--save` at run time)."
+                )
             reg_df = pd.DataFrame([
                 {
                     "Time":      (r["replayed_at"] or "")[:19].replace("T", " "),
@@ -1247,14 +1273,18 @@ elif page == "Agent Activity":
                     "Category":  f'{r["category"]}/{r["subcategory"]}',
                     "Verdict":   r["verdict"],
                     "Previous":  r["previous_verdict"] or "—",
-                    "🚨 New regression": "yes" if r["is_new_regression"] else "no",
+                    "🚨 New regression": "yes" if r.get("is_new_regression") else "no",
                     "Batch":     r["run_batch_id"],
                 }
                 for r in reg_rows
             ])
             st.dataframe(reg_df, use_container_width=True, hide_index=True)
         else:
-            st.caption("No regression runs yet — run `python3 agents/regression_harness.py`.")
+            st.caption(
+                "No regression runs yet — run "
+                "`python3 agents/regression_harness.py --save evals/results/regression_$(date -u +%Y%m%d_%H%M%S).json` "
+                "and commit the saved file."
+            )
 
 
 # ── Page: Threat Model ──
