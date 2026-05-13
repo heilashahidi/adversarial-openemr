@@ -1,7 +1,9 @@
 # ARCHITECTURE.md — Adversarial AI Security Platform
 
 > **Target system:** Clinical Co-Pilot (Weeks 1–2), deployed at `https://openemr.146-190-75-148.sslip.io/`
-> **Companion documents:** `THREAT_MODEL.md` (attack surface map, 26 sub-vectors)
+> **Companion documents:**
+> - [`THREAT_MODEL.md`](./THREAT_MODEL.md) — attack surface map, 26 sub-vectors, 2 confirmed empirical findings
+> - [`USERS.md`](./USERS.md) — platform users (Operator, Grader/Reviewer, Target Maintainer, Security Researcher, the agents themselves) and how their workflows drive specific architectural decisions. Every component below traces to at least one user it serves.
 
 ---
 
@@ -381,9 +383,10 @@ The state store is a single `state.db` SQLite file with five tables (`findings`,
 
 ### 6.3 Concurrency Model
 
-- Today: single-threaded campaign loop. Target calls are serialized with a 1-second sleep between attacks to be polite to the deployed Co-Pilot.
-- Mid-term: parallel Red Team generation (multiple subcategories at once) with a Postgres-backed queue and a separate target-runner process.
-- Idempotency: every `AttackPayload` has a unique `attack_id`. `add_finding` uses `INSERT OR REPLACE`, so a replay of the same attack overwrites the prior finding instead of duplicating. The campaign loop is restartable.
+- **Today:** `ThreadPoolExecutor`-based parallel campaign loop. `python3 evals/run_attacks.py --workers N` controls concurrency; default is **2**. Each worker independently sends attacks and runs them through Triage/Judge. The state store sets `PRAGMA busy_timeout = 5000` so the four concurrent writers don't trip SQLite's lock. Results are sorted back into seed order before JSON output.
+- **Politeness budget:** the default `--workers 2` was chosen empirically. At workers=1 → zero target failures. At workers=2 → still zero failures, 28% faster wall-clock. At workers=4 → 32% of requests returned HTTP 502 / 60s timeouts (the §5.4 finding in `THREAT_MODEL.md`). The platform clamps the default to a level the target tolerates; an operator who wants to stress-test can raise it.
+- **Mid-term:** when the Red Team Agent ships, parallel attack generation across multiple sub-vectors at once with a Postgres-backed queue (rather than ThreadPoolExecutor) and a separate target-runner process.
+- **Idempotency:** every `AttackPayload` has a unique `attack_id`. `add_finding` uses `INSERT OR REPLACE`, so a replay of the same attack overwrites the prior finding instead of duplicating. The campaign loop is restartable.
 
 ---
 
@@ -409,8 +412,9 @@ At 100K runs: switch Judge to Haiku 4.5 for low-severity cases (escalate to Sonn
 
 | Source | Limit | Mitigation |
 |---|---|---|
-| Target Co-Pilot | unknown — assume ~1 rps for politeness | `time.sleep(1)` between attacks in `run_attacks.py` |
-| OpenRouter (Judge) | 429 on burst | Exponential backoff with 3 retries inside `llm_client.call_llm` (TODO: not yet implemented) |
+| **Target Co-Pilot — empirical concurrency tolerance** | **32% failure rate (HTTP 502 / 60s timeouts) at workers=4; clean at workers≤2** — see `THREAT_MODEL.md §5.4` for the full evidence | `--workers 2` is the platform default. Higher values are opt-in and intended as a DoS-resilience probe rather than a normal run mode. Each worker still does its own pacing via per-attack target latency (~10s typical), so total request rate stays ≤ 0.3 rps per worker. |
+| Target Co-Pilot — per-request | unknown rate-limit policy at the application layer | Platform self-throttles to `--workers N`; on observing 5xx or timeout, target-failure short-circuit kicks in (`verdict=error`, no Judge call) so a degraded target doesn't burn extra Judge spend |
+| OpenRouter (Judge / Triage) | 429 on burst | Exponential backoff with 3 retries inside `llm_client.call_llm` (TODO: not yet implemented) |
 | Anthropic via OpenRouter (pinned) | Provider-side rate limit if a campaign runs tens of Judge calls per minute | Backoff; on extended 429, manual fallback to `claude-haiku-4.5` (Sonnet's verdicts can be re-confirmed later) |
 | OpenAI / other Red Team providers | Standard rate limits | Already routed through OpenRouter's pooling |
 
@@ -522,6 +526,9 @@ Frontier models (Claude, GPT) refuse offensive-security workflows. We measured t
 
 **"Why pin the Judge to Anthropic on OpenRouter?"**
 Without pinning, OpenRouter may route to a different provider between runs (Anthropic direct, AWS Bedrock, Vertex). Output behavior differs subtly across providers — schema adherence, refusal phrasing, length. Verdict reproducibility is non-negotiable for regression to mean anything.
+
+**"Why a two-tier Judge (Triage + Sonnet) instead of one?"**
+Asymmetric error budgets. The two ways a Judge can be wrong are not equally bad: a false-positive escalation (Triage forwards an obvious defense to Sonnet) costs one extra ~$0.004 call. A false-negative defense (Triage marks a real bypass as `defended`) is catastrophic — it silently degrades coverage, regression, and Orchestrator targeting. So Triage is conservative *by construction*: its prompt's output schema does not include `bypass` as a valid value, and code enforces that anything other than `defended + confidence ≥ 0.85` escalates. **A real exploit cannot slip past Triage because Triage isn't allowed to clear one.** This is the same pattern radiology AI screening, security-ops triage, and ATS resume filtering use — high-stakes screening always wants the asymmetric error budget. Empirically, this drops Judge spend ~50% on a clean target while preserving every bypass detection (the 1 confirmed bypass in our 40-case run escalated to Sonnet correctly; the 38 defended cases short-circuited at Triage; the 1 target failure bypassed both tiers via the deterministic short-circuit).
 
 **"Why isn't the regression harness an agent?"**
 Determinism. LLM-based replay introduces variance — the same attack might pass on Monday and fail on Tuesday because the Judge model drifted, not because the vulnerability returned. The harness uses substring/regex rules over a frozen `expected_safe_behavior`. The Judge evaluates once, at exploit promotion; never again.
