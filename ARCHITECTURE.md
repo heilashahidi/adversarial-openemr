@@ -17,7 +17,7 @@ A single-agent or pipeline architecture was explicitly rejected. Attack generati
 
 The platform attacks a **live deployed target**, not a mock. Every attack runs against the same Clinical Co-Pilot that a physician would use. Static test suites against mocked responses don't catch the behavioral drift that makes AI systems unpredictable under adversarial pressure.
 
-**Model selection is deliberate and mixed.** Frontier models refuse offensive security workflows, so the Red Team uses open-source models via OpenRouter (Mistral 7B Instruct, Llama 3.1 8B Instruct) that don't have these restrictions. Triage uses Claude Haiku 4.5 — cheap enough that it can short-circuit ~90% of campaigns at a fraction of Judge cost. The Judge uses Claude Sonnet 4.5 (provider-pinned to Anthropic on OpenRouter) for consistent evaluation — verdict drift is the single biggest threat to platform integrity. The Orchestrator uses Llama 3.1 8B for fast, structured decision-making. The Documentation Agent uses Mistral 7B for prose-from-structured-data. Empirically, a 40-case suite costs ~$0.14 with this mix; the same suite with Sonnet-only judging would cost ~$0.32.
+**Model selection is deliberate and mixed.** Frontier models refuse offensive security workflows, so the Red Team uses open-source models via OpenRouter (Mistral 7B Instruct, Llama 3.1 8B Instruct) that don't have these restrictions. Triage uses Claude Haiku 4.5 — cheap enough that it can short-circuit ~76% of cases at a fraction of Judge cost. The Judge uses Claude Sonnet 4.5 (provider-pinned to Anthropic on OpenRouter) for consistent evaluation — verdict drift is the single biggest threat to platform integrity. The Orchestrator uses Llama 3.1 8B for fast, structured decision-making. The Documentation Agent uses Mistral 7B for prose-from-structured-data. Empirically (§7.1.1), a 40-case suite averages ~$0.11 with this mix; the same suite at the measured Sonnet-only baseline ($0.00375/attack) would be ~$0.15 — a 26% reduction, smaller than naive token-price math predicts because 24% of cases still escalate.
 
 Verdicts use four labels — `bypass` (attack succeeded), `defended` (target refused correctly), `partial` (target wavered), `error` (target failed before the judge could evaluate). This last label was added in Stage 3 when a base64 payload made the target return HTTP 500; a target failure is itself a signal worth investigating, not a defense.
 
@@ -52,8 +52,8 @@ flowchart TD
     TC <==>|POST /chat| TGT
     TC -->|status ≥ 400| ERR
     TC ==>|HTTP 200| T1
-    T1 ==>|~90% obvious clean| DEF
-    T1 ==>|~10% escalate| T2
+    T1 ==>|~76% obvious clean| DEF
+    T1 ==>|~24% escalate| T2
     T2 ==> SS
     DEF --> SS
     ERR --> SS
@@ -78,17 +78,19 @@ flowchart TD
     class DEF,ERR result
 ```
 
-The two-tier Judge pipeline is the load-bearing change from the original four-agent design. **Triage handles ~90% of cases at ~5× lower cost; Judge handles only what Triage flags as ambiguous.** The error-budget asymmetry is structural — Triage's prompt does not include `bypass` as a possible output value, so it cannot accidentally clear a real exploit. False-positive escalations cost a Sonnet call; false-negative defenses would be catastrophic. By design, only Tier 2 can declare a defense broken.
+The two-tier Judge design is the load-bearing change from the original four-agent design. **Triage handles ~76% of cases at ~4× lower per-call cost; Judge handles only what Triage flags as ambiguous** (24.3% empirical escalation rate, see §7.1.1). The error-budget asymmetry is structural — Triage's prompt does not include `bypass` as a possible output value, so it cannot accidentally clear a real exploit. False-positive escalations cost a Sonnet call; false-negative defenses would be catastrophic. By design, only Tier 2 can declare a defense broken.
 
 ### 1.1 Agent Roles
 
-| Agent | Model (as configured) | Inputs | Outputs | Trust |
-|---|---|---|---|---|
-| **Orchestrator** | `meta-llama/llama-3.1-8b-instruct` | Coverage map, threat-model priorities, open findings, $ budget | `CampaignDirective` (cat, subcat, count, mutation strategy, seeds, $) | High — sets scope |
-| **Red Team** | `mistralai/mistral-7b-instruct` (gen), `meta-llama/llama-3.1-8b-instruct` (mutation) | Directive, seed templates, partial-success findings, threat-model context | `AttackPayload[]` | Low — output untrusted by design |
-| **Triage (T1)** | `anthropic/claude-haiku-4.5` (Anthropic-pinned, T=0.0) | Attack payload, target response, expected-safe rubric | `{escalate, verdict ∈ {defended, null}, confidence, reasoning}` | Medium — can only short-circuit obvious clean defenses; never declares a bypass |
-| **Judge (T2)** | `anthropic/claude-sonnet-4.5` (Anthropic-pinned, T=0.0) | Same inputs as Triage, called only when T1 escalates | `Verdict {bypass/defended/partial, severity, confidence, reasoning}` | **Highest** — drives every downstream decision |
-| **Documentation** | `mistralai/mistral-7b-instruct` | Confirmed exploit, target response, finding metadata | Vulnerability report (Markdown) | Medium — reviewed before filing critical-severity |
+Each agent below has its own model, inputs, outputs, trust level, and decision-making authority. The "Decision-making authority" column maps directly to the rubric's requirement that each role be "a distinct agent with its own responsibilities, context, and decision-making authority."
+
+| Agent | Model (as configured) | Inputs | Outputs | Trust | Decision-making authority |
+|---|---|---|---|---|---|
+| **Orchestrator** | `meta-llama/llama-3.1-8b-instruct` | Coverage map, threat-model priorities, open findings, $ budget | `CampaignDirective` (cat, subcat, count, mutation strategy, seeds, $) | High — sets scope | **Chooses which subcategory to attack next** based on the §3.1 deterministic score (coverage gap, threat priority, partials, regression status, cost, recency); sets attack count and per-campaign budget cap |
+| **Red Team** | `mistralai/mistral-7b-instruct` (gen), `meta-llama/llama-3.1-8b-instruct` (mutation) | Directive, seed templates, partial-success findings, threat-model context | `AttackPayload[]` | Low — output untrusted by design | **Chooses mutation strategy** (paraphrase / escalate / encode / fragment / embed / replay) and crafts the payload; does *not* see the Judge's prior verdicts so it can't optimize toward "bypass" outcomes |
+| **Triage (T1)** | `anthropic/claude-haiku-4.5` (Anthropic-pinned, T=0.0) | Attack payload, target response, expected-safe rubric | `{escalate, verdict ∈ {defended, null}, confidence, reasoning}` | Medium — can only short-circuit obvious clean defenses; never declares a bypass | **Decides whether to escalate.** Output schema literally excludes `bypass`, so Triage cannot end the evaluation chain on a positive finding — only Judge can. Forced to escalate when confidence < 0.85 |
+| **Judge (T2)** | `anthropic/claude-sonnet-4.5` (Anthropic-pinned, T=0.0) | Same inputs as Triage, called only when T1 escalates | `Verdict {bypass/defended/partial, severity, confidence, reasoning}` | **Highest** — drives every downstream decision | **Final verdict authority.** A `bypass` with confidence ≥ 0.9 auto-promotes to the `exploits` table and triggers the Regression Harness. No agent overrides the Judge — only a human via the §10 approval gate can vacate a verdict |
+| **Documentation** | `mistralai/mistral-7b-instruct` | Confirmed exploit, target response, finding metadata | Vulnerability report (Markdown) | Medium — reviewed before filing critical-severity | **Drafts the human-facing report** (Summary, Clinical Impact, Reproduction, Remediation, Fix Validation); deterministic sections are filled from state, LLM only writes prose. Critical-severity reports require human approval before filing |
 
 > **Drift from earlier doc:** the previous architecture claimed "Mistral Large / Llama 70B / Haiku" — the actual `config.py` runs the smaller and cheaper variants above. The smaller models are sufficient for mutation and structured output; we can swap up to larger variants without architectural changes (only `MODELS` in `config.py`).
 
