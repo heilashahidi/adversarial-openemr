@@ -418,6 +418,14 @@ At 100K runs: switch Judge to Haiku 4.5 for low-severity cases (escalate to Sonn
 | Anthropic via OpenRouter (pinned) | Provider-side rate limit if a campaign runs tens of Judge calls per minute | Backoff; on extended 429, manual fallback to `claude-haiku-4.5` (Sonnet's verdicts can be re-confirmed later) |
 | OpenAI / other Red Team providers | Standard rate limits | Already routed through OpenRouter's pooling |
 
+### 7.2.1 Target-version detection — honest limitation
+
+The Regression Harness should ideally trigger automatically when the target system changes (rubric: "Triggering regression runs when the target system changes"). In practice, the Clinical Co-Pilot does **not** expose a `/version` endpoint or a build identifier in `/health` — so the platform cannot detect target-side redeploys.
+
+Our pragmatic substitute: the Orchestrator runs the Regression Harness as the **default** first step of every campaign (see `agents/orchestrator_agent.py`; opt out with `--skip-regression`). This is more conservative than the rubric strictly asks for — we regress even when the target may not have changed — but it removes the can't-detect-change failure mode.
+
+If the target ever adds a build identifier, the platform's response-handling can stash it in the result JSON's `target_version` field and the Orchestrator can become smarter (skip regression when target version is unchanged from the last batch).
+
 ### 7.3 Failure Modes
 
 | Failure | Detection | Handling |

@@ -21,7 +21,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from target_client import send_attack, send_multi_turn_attack, check_target_health
 from state_store import add_finding, get_summary, init_db, promote_finding_to_exploit
-from config import DEFAULT_PATIENT, OPENROUTER_API_KEY, TARGET_BASE_URL
+from config import (
+    DEFAULT_PATIENT, OPENROUTER_API_KEY, TARGET_BASE_URL,
+    MAX_COST_PER_CAMPAIGN,
+)
 
 try:
     from langsmith import traceable
@@ -219,9 +222,17 @@ def run_attack_suite(category_filter: str = None, id_filter: str = None, workers
 
     if workers == 1:
         # Serial path — preserves original verbose progress output
+        halted_for_budget = False
+        cumulative_cost = 0.0
         for attack in attacks:
             result = run_single_attack(attack)
             results.append(result)
+            cumulative_cost += (result.get("triage_cost") or 0) + (result.get("judge_cost") or 0)
+            if cumulative_cost > MAX_COST_PER_CAMPAIGN:
+                print(f"\n  🛑 BUDGET EXCEEDED  (${cumulative_cost:.4f} > ${MAX_COST_PER_CAMPAIGN:.2f}).")
+                print(f"     Halting run with {len(attacks) - len(results)} attacks unrun.")
+                halted_for_budget = True
+                break
             time.sleep(1)
     else:
         # Parallel path — workers run quiet; main thread prints one line per completion
@@ -231,6 +242,8 @@ def run_attack_suite(category_filter: str = None, id_filter: str = None, workers
 
         verdict_emoji_map = {"bypass": "🔴", "defended": "🟢", "partial": "🟡", "error": "⚪"}
 
+        cumulative_cost = 0.0
+        halted_for_budget = False
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [pool.submit(run_single_attack, a, None, True) for a in attacks]
             for fut in as_completed(futures):
@@ -241,6 +254,7 @@ def run_attack_suite(category_filter: str = None, id_filter: str = None, workers
                         print(f"  ❌ worker error: {e}")
                     continue
                 results.append(result)
+                cumulative_cost += (result.get("triage_cost") or 0) + (result.get("judge_cost") or 0)
                 with print_lock:
                     done_n += 1
                     v = result.get("verdict", "error")
@@ -250,8 +264,19 @@ def run_attack_suite(category_filter: str = None, id_filter: str = None, workers
                         f"  [{done_n:2d}/{len(attacks)}] "
                         f"{em} {result['attack_id']:7s}  "
                         f"{result['category']:22s} / {result['subcategory']:30s}  "
-                        f"→ {v.upper():9s} ({tier}, conf {result.get('verdict_confidence', 0.0):.2f})"
+                        f"→ {v.upper():9s} ({tier}, conf {result.get('verdict_confidence', 0.0):.2f})  "
+                        f"running ${cumulative_cost:.4f}"
                     )
+                # Budget check — cancel remaining futures if we've blown the budget
+                if cumulative_cost > MAX_COST_PER_CAMPAIGN and not halted_for_budget:
+                    halted_for_budget = True
+                    with print_lock:
+                        print(f"\n  🛑 BUDGET EXCEEDED  (${cumulative_cost:.4f} > "
+                              f"${MAX_COST_PER_CAMPAIGN:.2f}). Cancelling in-flight workers.")
+                    for f in futures:
+                        if not f.done():
+                            f.cancel()
+                    break
 
         # Restore original attack order for deterministic JSON output
         results.sort(key=lambda r: attack_order.get(r["attack_id"], 9999))
