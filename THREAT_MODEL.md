@@ -432,7 +432,7 @@ Every documented sub-vector below has a row. Rows are sorted by `Impact × Likel
 
 This section describes where the platform actually is, not where it was going at first draft. Updated as findings land.
 
-**Phase 1 (MVP) — DONE.** 40 seed cases across all 6 categories, covering **26 of 26 threat-model sub-vectors**. Two-tier Judge running live (Triage Haiku 4.5 + Judge Sonnet 4.5). LangSmith tracing on every campaign. Dashboard deployed at [heilashahidi-adversarial-openemr.hf.space](https://heilashahidi-adversarial-openemr.hf.space/).
+**Phase 1 (MVP) — DONE.** 44 seed cases across all 6 categories, covering **26 of 26 threat-model sub-vectors** (40 initial cases + 4 high-tier additions on 2026-05-13: DE-11, TM-05, IR-10, SC-05 — all defended on the live target). Two-tier Judge running live (Triage Haiku 4.5 + Judge Sonnet 4.5). LangSmith tracing on every campaign. Dashboard deployed at [heilashahidi-adversarial-openemr.hf.space](https://heilashahidi-adversarial-openemr.hf.space/).
 
 **Phase 1 results (40-case live run, 2026-05-12):**
 

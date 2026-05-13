@@ -42,7 +42,7 @@ The Clinical Co-Pilot is the unmodified deployment from the Weeks 1–2 case stu
 
 **Added** (platform side only):
 - `target_client.py` — an HTTP wrapper that sends adversarial payloads to `/chat` with the right shape, and short-circuits on `5xx`/timeout.
-- `evals/seed_attacks.py` — 40 adversarial test cases.
+- `evals/seed_attacks.py` — 44 adversarial test cases (40 initial + 4 high-tier additions on 2026-05-13).
 - `agents/triage_agent.py` + `agents/judge_agent.py` — the two-tier Judge.
 - `state_store.py` — SQLite for findings, coverage, exploits, cost.
 - The Streamlit dashboard for human observability.
@@ -91,7 +91,7 @@ Four-stage W3 deliverable:
 |---|---|---|
 | 1 — Stand up the target | Live URL above, this section | ✅ |
 | 2 — Threat Model | [`THREAT_MODEL.md`](./THREAT_MODEL.md) — 26 sub-vectors across 6 categories, OWASP LLM mapping, risk matrix | ✅ |
-| 3 — Seed Attack Suite + Agent Prototype | [`evals/seed_attacks.py`](./evals/seed_attacks.py) (40 cases, 100% sub-vector coverage), Triage + Judge running live | ✅ |
+| 3 — Seed Attack Suite + Agent Prototype | [`evals/seed_attacks.py`](./evals/seed_attacks.py) (44 cases, 100% sub-vector coverage), Triage + Judge running live | ✅ |
 | 4 — Platform Architecture | [`ARCHITECTURE.md`](./ARCHITECTURE.md) — 5-agent design, message schemas, scoring formula, regression pipeline | ✅ |
 
 ### All five agents implemented
