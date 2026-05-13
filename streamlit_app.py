@@ -27,7 +27,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 TARGET_URL = "https://openemr.146-190-75-148.sslip.io"
 REPO_URL = "https://github.com/heilashahidi/adversarial-openemr"
-LANGSMITH_PROJECT_URL = "https://smith.langchain.com/o/personal/projects/p/adversarial-openemr"
+# Note: a LangSmith project URL used to live here, but the project is private —
+# clicking it dropped graders onto a sign-in wall. The architecture's §8.2 still
+# documents the LangSmith integration; it's just not surfaced as a clickable link.
 
 VERDICT_EMOJI = {
     "bypass":   "🔴",
@@ -286,13 +288,13 @@ st.markdown(
 
 st.sidebar.title("🛡️ Adversarial Platform")
 st.sidebar.markdown(
-    f"[🎯 Target]({TARGET_URL}) · [📦 Repo]({REPO_URL}) · [🔭 Traces]({LANGSMITH_PROJECT_URL})"
+    f"[🎯 Target]({TARGET_URL}) · [📦 Repo]({REPO_URL})"
 )
 st.sidebar.divider()
 
 page = st.sidebar.radio(
     "Navigation",
-    ["Overview", "Coverage Map", "Attack Browser", "Threat Model", "Architecture"],
+    ["Overview", "Coverage Map", "Attack Browser", "Threat Model", "Users", "Architecture"],
     label_visibility="collapsed",
 )
 
@@ -768,6 +770,14 @@ elif page == "Threat Model":
     st.title("Threat Model")
     st.caption(f"Full text from [THREAT_MODEL.md]({REPO_URL}/blob/main/THREAT_MODEL.md) — 26 sub-vectors across 6 categories.")
     st.markdown(load_markdown("THREAT_MODEL.md"))
+
+
+# ── Page: Users ──
+
+elif page == "Users":
+    st.title("Platform Users")
+    st.caption(f"Full text from [USERS.md]({REPO_URL}/blob/main/USERS.md) — 4 human user classes + 1 machine user class. Every architectural component traces back to at least one user it serves.")
+    st.markdown(load_markdown("USERS.md"))
 
 
 # ── Page: Architecture ──
