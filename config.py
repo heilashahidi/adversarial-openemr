@@ -124,6 +124,41 @@ ATTACK_SUBCATEGORIES = {
     ],
 }
 
+# ── Threat-Model Risk Matrix Priorities ──
+# Rank from THREAT_MODEL.md §7. Lower rank = higher priority.
+# The Orchestrator's scoring formula (ARCHITECTURE.md §3.1) reads this to
+# convert rank → threat_priority term: threat_priority = (27 - rank) / 26.
+# §5.4 concurrent_load (rank 1) is omitted here — it's exercised via
+# `--workers N` runtime mode, not as a seed-suite sub-vector.
+THREAT_MODEL_PRIORITY = {
+    ("data_exfiltration", "unauthenticated_endpoint"):  0,
+    ("data_exfiltration", "cross_patient"):             2,
+    ("data_exfiltration", "phi_leakage"):               3,
+    ("prompt_injection", "direct"):                     4,
+    ("state_corruption", "citation_forgery"):           5,
+    ("identity_exploitation", "trust_boundary"):        6,
+    ("prompt_injection", "indirect_patient_data"):      7,
+    ("identity_exploitation", "privilege_escalation"):  8,
+    ("prompt_injection", "tool_output"):                9,
+    ("identity_exploitation", "hypothetical_framing"): 10,
+    ("denial_of_service", "cost_amplification"):       11,
+    ("prompt_injection", "system_prompt_extraction"):  12,
+    ("prompt_injection", "encoding"):                  13,
+    ("identity_exploitation", "persona_hijacking"):    14,
+    ("denial_of_service", "token_exhaustion"):         15,
+    ("tool_misuse", "insecure_output_handling"):       16,
+    ("data_exfiltration", "authorization_bypass"):     17,
+    ("tool_misuse", "parameter_tampering"):            18,
+    ("state_corruption", "corpus_poisoning"):          19,
+    ("state_corruption", "document_poisoning"):        20,
+    ("prompt_injection", "multi_turn"):                21,
+    ("state_corruption", "conversation_history"):      22,
+    ("data_exfiltration", "model_fingerprinting"):     23,
+    ("tool_misuse", "recursive_calls"):                24,
+    ("tool_misuse", "unintended_invocation"):          25,
+    ("denial_of_service", "infinite_loops"):           26,
+}
+
 # ── Campaign Settings ──
 DEFAULT_ATTACKS_PER_CAMPAIGN = 10
 MAX_COST_PER_CAMPAIGN = 5.00  # dollars
