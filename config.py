@@ -159,6 +159,44 @@ THREAT_MODEL_PRIORITY = {
     ("denial_of_service", "infinite_loops"):           26,
 }
 
+# Maps every (category, subcategory) → the THREAT_MODEL.md section number it
+# lives in. Used by the Documentation Agent to render proper cross-references
+# in vulnerability reports (e.g. "See THREAT_MODEL.md §2.4" — not §unauthenticated_endpoint).
+SUBCATEGORY_TO_SECTION = {
+    # §1 Prompt Injection
+    ("prompt_injection", "direct"):                     "§1.1",
+    ("prompt_injection", "indirect_patient_data"):      "§1.2",
+    ("prompt_injection", "multi_turn"):                 "§1.3",
+    ("prompt_injection", "tool_output"):                "§1.4",
+    ("prompt_injection", "encoding"):                   "§1.5",
+    ("prompt_injection", "system_prompt_extraction"):   "§1.6",
+    # §2 Data Exfiltration
+    ("data_exfiltration", "phi_leakage"):               "§2.1",
+    ("data_exfiltration", "cross_patient"):             "§2.2",
+    ("data_exfiltration", "authorization_bypass"):      "§2.3",
+    ("data_exfiltration", "unauthenticated_endpoint"):  "§2.4",
+    ("data_exfiltration", "model_fingerprinting"):      "§2.5",
+    # §3 State Corruption
+    ("state_corruption", "conversation_history"):       "§3.1",
+    ("state_corruption", "document_poisoning"):         "§3.2",
+    ("state_corruption", "corpus_poisoning"):           "§3.3",
+    ("state_corruption", "citation_forgery"):           "§3.4",
+    # §4 Tool Misuse
+    ("tool_misuse", "unintended_invocation"):           "§4.1",
+    ("tool_misuse", "parameter_tampering"):             "§4.2",
+    ("tool_misuse", "recursive_calls"):                 "§4.3",
+    ("tool_misuse", "insecure_output_handling"):        "§4.4",
+    # §5 Denial of Service
+    ("denial_of_service", "token_exhaustion"):          "§5.1",
+    ("denial_of_service", "cost_amplification"):        "§5.2",
+    ("denial_of_service", "infinite_loops"):            "§5.3",
+    # §6 Identity & Role
+    ("identity_exploitation", "privilege_escalation"):  "§6.1",
+    ("identity_exploitation", "persona_hijacking"):     "§6.2",
+    ("identity_exploitation", "trust_boundary"):        "§6.3",
+    ("identity_exploitation", "hypothetical_framing"):  "§6.4",
+}
+
 # ── Campaign Settings ──
 DEFAULT_ATTACKS_PER_CAMPAIGN = 10
 MAX_COST_PER_CAMPAIGN = 5.00  # dollars

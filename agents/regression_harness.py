@@ -148,12 +148,14 @@ def _load_exploits() -> list[dict]:
 
 
 def _persist_regression(exploit_id: int, verdict: str, reasoning: str, response_text: str):
-    """Update the exploit's fix_validated flag and append a regression log entry."""
+    """Update the exploit's fix-validation columns so the Documentation Agent
+    can include current regression status in the next report it writes."""
     conn = _get_conn()
     fix_validated = 1 if verdict == "pass" else 0
     conn.execute(
-        "UPDATE exploits SET fix_validated=? WHERE id=?",
-        (fix_validated, exploit_id),
+        "UPDATE exploits SET fix_validated=?, last_regression_verdict=?, "
+        "last_regression_at=?, last_regression_reasoning=? WHERE id=?",
+        (fix_validated, verdict, datetime.utcnow().isoformat(), reasoning, exploit_id),
     )
     conn.commit()
     conn.close()

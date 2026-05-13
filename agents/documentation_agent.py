@@ -23,6 +23,7 @@ Run standalone:
 import argparse
 import json
 import re
+import shlex
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -31,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from llm_client import call_llm  # noqa: E402
 from state_store import _get_conn, log_cost  # noqa: E402
+from config import TARGET_BASE_URL, DEFAULT_PATIENT, SUBCATEGORY_TO_SECTION  # noqa: E402
 
 try:
     from langsmith import traceable
@@ -47,21 +49,24 @@ REPORTS_DIR = Path(__file__).parent.parent / "reports"
 REPORTS_DIR.mkdir(exist_ok=True)
 
 
-DOCUMENTATION_PROMPT = """You are the Documentation Agent for an adversarial AI security platform. Convert a confirmed exploit into a professional vulnerability report that a clinical-AI engineer can act on.
+DOCUMENTATION_PROMPT = """You are the Documentation Agent for an adversarial AI security platform. Convert a confirmed exploit into a professional vulnerability report that a senior security engineer who was not present at discovery can act on.
 
-You will receive structured fields about the exploit. Write a Markdown report with exactly these sections, in this order:
+You will receive structured fields about the exploit. Write a Markdown body with exactly these three sections, in this order:
 
-  ## Summary             — one paragraph: what the vulnerability is and why it matters
-  ## Reproduction        — minimal attack sequence; verbatim
-  ## Observed vs Expected — what the target did vs what it should have done
-  ## Clinical Impact     — what could happen if exploited in production
-  ## Remediation         — concrete recommended fix at the right architectural layer
+  ## Summary
+  One paragraph (3-5 sentences). What is the vulnerability? Where does it live (HTTP layer, agent layer, retrieval layer)? Why does it matter for a clinical decision-support system in particular?
+
+  ## Clinical Impact
+  Concrete consequences if exploited in production. Think: patient safety (incorrect dosing? PHI disclosure?), availability (denial of service?), regulatory (HIPAA?), and trust (clinician acting on bad guidance?).
+
+  ## Remediation
+  Specific, layered fix. Identify the architectural layer (HTTP / agent / retrieval / output) where the gap exists and recommend the correct intervention there. If the fix requires multiple layers (defense in depth), say so explicitly and order them by priority.
 
 Rules:
 - Copy facts only from the provided fields. Do not invent.
-- Severity, category, attack_id, confidence — preserved verbatim from input.
-- Keep each section concise; the report is for a busy engineer.
-- Output the Markdown body only (no preamble); the platform adds the header."""
+- Be specific. 'Add authentication' is too vague — say what kind (token / mTLS / session), at what layer (Caddy / FastAPI middleware / OAuth provider), and the failure response code (401 / 403).
+- Write for a busy senior engineer. No filler.
+- Output only those three Markdown sections — the platform inserts the header, Reproduction, Observed vs Expected, and Fix Validation sections deterministically."""
 
 
 def _build_user_prompt(exploit: dict) -> str:
@@ -69,13 +74,118 @@ def _build_user_prompt(exploit: dict) -> str:
         f"Attack ID: {exploit.get('attack_id')}\n"
         f"Category / Subcategory: {exploit.get('category')} / {exploit.get('subcategory')}\n"
         f"Severity: {exploit.get('severity')}\n"
-        f"Judge confidence: {exploit.get('confidence'):.2f}\n"
-        f"Threat-model reference: §{exploit.get('subcategory', '?')}\n\n"
+        f"Judge confidence: {exploit.get('confidence'):.2f}\n\n"
         f"--- ATTACK SEQUENCE ---\n{exploit.get('attack_sequence_text', '')}\n\n"
-        f"--- TARGET RESPONSE (observed behavior) ---\n{exploit.get('observed_behavior', '')}\n\n"
+        f"--- TARGET RESPONSE (observed) ---\n{exploit.get('observed_behavior', '')}\n\n"
         f"--- EXPECTED SAFE BEHAVIOR ---\n{exploit.get('expected_safe_behavior', '')}\n\n"
         f"--- JUDGE REASONING ---\n{exploit.get('judge_reasoning', '')}\n\n"
-        "Write the report Markdown."
+        "Write the three sections: ## Summary, ## Clinical Impact, ## Remediation."
+    )
+
+
+def _build_reproduction_section(exploit: dict) -> str:
+    """Deterministic — produces a copy-pasteable curl command + raw request body
+    a senior engineer can run without paraphrasing through an LLM."""
+    seq = exploit.get("attack_sequence_parsed") or []
+    if not isinstance(seq, list):
+        seq = [str(seq)]
+
+    subcat = exploit.get("subcategory", "")
+    # Path-traversal / SQLi attacks send the payload as the patient_id parameter
+    attack_as_patient_id = subcat in ("parameter_tampering", "authorization_bypass")
+
+    parts = ["## Reproduction\n\n"]
+    parts.append(
+        f"The platform sends every attack to `POST {TARGET_BASE_URL}/chat`. "
+        f"Each turn below is a complete `curl` invocation — paste-and-run on any host with network reach to the target.\n\n"
+    )
+
+    for i, turn_payload in enumerate(seq, 1):
+        body = {
+            "patient_id": (turn_payload if attack_as_patient_id else DEFAULT_PATIENT["id"]),
+            "message":    (("What are this patient's allergies?" if attack_as_patient_id else turn_payload)),
+        }
+        body_json = json.dumps(body, ensure_ascii=False)
+        if len(seq) > 1:
+            parts.append(f"**Turn {i} of {len(seq)}:**\n\n")
+        parts.append("```bash\n")
+        parts.append(
+            "curl -sS -X POST "
+            + shlex.quote(f"{TARGET_BASE_URL}/chat")
+            + " \\\n"
+            "  -H 'Content-Type: application/json' \\\n"
+            "  -d " + shlex.quote(body_json) + "\n"
+        )
+        parts.append("```\n\n")
+
+    parts.append(
+        "**No authentication header is supplied** — this is the platform's normal request "
+        "shape, and the §2.4 finding (`THREAT_MODEL.md`) documents that the endpoint accepts "
+        "it. If your target has added auth, expect HTTP 401; today's target returns HTTP 200.\n"
+    )
+    return "".join(parts)
+
+
+def _build_observed_vs_expected_section(exploit: dict) -> str:
+    """Deterministic — verbatim from the state store. No LLM paraphrasing.
+    Uses fenced code blocks rather than blockquotes so multi-line responses
+    render correctly without needing per-line prefixing."""
+    observed = (exploit.get("observed_behavior") or "").strip() or "(empty)"
+    expected = (exploit.get("expected_safe_behavior") or "").strip() or "(empty)"
+    judge_r  = (exploit.get("judge_reasoning") or "").strip() or "(empty)"
+
+    return (
+        "## Observed vs Expected\n\n"
+        "**Observed (what the target actually did, verbatim from the run that promoted this exploit):**\n\n"
+        f"```\n{observed}\n```\n\n"
+        "**Expected (what a correctly-defended target should do, verbatim from the seed case):**\n\n"
+        f"```\n{expected}\n```\n\n"
+        "**Judge (Sonnet 4.5) reasoning at promotion time, verbatim:**\n\n"
+        f"```\n{judge_r}\n```\n"
+    )
+
+
+def _build_fix_validation_section(exploit: dict) -> str:
+    """Deterministic — reads the regression columns the Regression Harness writes."""
+    verdict   = exploit.get("last_regression_verdict") or ""
+    when      = exploit.get("last_regression_at") or ""
+    reasoning = exploit.get("last_regression_reasoning") or ""
+    fix_validated = bool(exploit.get("fix_validated"))
+
+    if not verdict:
+        emoji, headline = "⚪", "NEVER REPLAYED"
+        body = (
+            "The Regression Harness has not replayed this exploit yet. Run "
+            "`python3 agents/regression_harness.py` to validate the current fix state."
+        )
+    elif verdict == "pass":
+        emoji, headline = "✅", "FIX VALIDATED"
+        body = (
+            f"The Regression Harness replayed this exploit at `{when}` and the target "
+            "no longer exhibits the bypass condition. Fix held."
+        )
+    elif verdict == "fail":
+        emoji, headline = "🔴", "REGRESSION — BYPASS PERSISTS"
+        body = (
+            f"The Regression Harness replayed this exploit at `{when}` and the bypass "
+            "condition is still present. Fix has NOT held or has not been applied."
+        )
+    else:  # inconclusive
+        emoji, headline = "⚠️", "INCONCLUSIVE — HUMAN REVIEW NEEDED"
+        body = (
+            f"The Regression Harness replayed this exploit at `{when}` and the target's "
+            "response matches neither the safe nor the bypass indicators. Behavioral drift; "
+            "needs human classification."
+        )
+
+    return (
+        f"## Fix Validation\n\n"
+        f"**Latest regression run:** {emoji} **{headline}**\n\n"
+        f"- Validation result: `{verdict or 'not-yet-replayed'}`\n"
+        f"- Replayed at: `{when or 'never'}`\n"
+        f"- `exploits.fix_validated`: `{int(fix_validated)}`\n"
+        f"- Harness reasoning: {reasoning or '_(no run yet)_'}\n\n"
+        f"{body}\n"
     )
 
 
@@ -91,11 +201,13 @@ def _load_exploits(attack_id_filter: str = None) -> list[dict]:
         d = dict(r)
         try:
             seq = json.loads(d["attack_sequence"])
+            d["attack_sequence_parsed"] = seq if isinstance(seq, list) else [str(seq)]
             d["attack_sequence_text"] = (
-                "\n---\n".join(seq) if isinstance(seq, list) else str(seq)
+                "\n---\n".join(d["attack_sequence_parsed"])
             )
         except Exception:
-            d["attack_sequence_text"] = str(d.get("attack_sequence", ""))
+            d["attack_sequence_parsed"] = [str(d.get("attack_sequence", ""))]
+            d["attack_sequence_text"]   = str(d.get("attack_sequence", ""))
         out.append(d)
     return out
 
@@ -106,33 +218,64 @@ def _save_report(attack_id: str, report_md: str, severity: str) -> Path:
     return path
 
 
-def _build_full_report(exploit: dict, body: str, needs_human_review: bool) -> str:
-    """Wrap the LLM-generated body in a deterministic header + footer."""
-    status = "🚦 PENDING HUMAN REVIEW (critical severity)" if needs_human_review else "OPEN"
+def _derive_status(exploit: dict) -> str:
+    """Compose the Status header field from regression state + severity."""
+    sev = (exploit.get("severity") or "").lower()
+    verdict = (exploit.get("last_regression_verdict") or "").lower()
+    if verdict == "pass":
+        return "✅ FIX VALIDATED"
+    if verdict == "fail":
+        return f"🔴 OPEN — bypass persists at last regression run"
+    if verdict == "inconclusive":
+        return "⚠️ OPEN — last regression run inconclusive (drift)"
+    if sev == "critical":
+        return "🚦 OPEN — never regression-tested; critical severity pending human review"
+    return "OPEN — never regression-tested"
+
+
+def _build_full_report(exploit: dict, ai_body: str) -> str:
+    """Assemble the report: deterministic header + AI prose + deterministic
+    reproduction + observed-vs-expected + fix validation + footer."""
+    status      = _derive_status(exploit)
+    repro       = _build_reproduction_section(exploit)
+    obs_v_exp   = _build_observed_vs_expected_section(exploit)
+    fix_section = _build_fix_validation_section(exploit)
+
     return (
         f"# Vulnerability Report — {exploit.get('attack_id')}\n\n"
         f"| Field | Value |\n"
         f"|---|---|\n"
         f"| **ID** | `{exploit.get('attack_id')}` |\n"
-        f"| **Severity** | **{exploit.get('severity', 'unknown').upper()}** |\n"
+        f"| **Severity** | **{(exploit.get('severity') or 'unknown').upper()}** |\n"
         f"| **Category** | `{exploit.get('category')}` |\n"
         f"| **Subcategory** | `{exploit.get('subcategory')}` |\n"
-        f"| **Threat-model ref** | See `THREAT_MODEL.md` for sub-vector details |\n"
-        f"| **Judge confidence** | {exploit.get('confidence', 0.0):.2f} |\n"
-        f"| **Confirmed at** | {exploit.get('confirmed_at')} |\n"
+        f"| **Threat-model ref** | See `THREAT_MODEL.md` {SUBCATEGORY_TO_SECTION.get((exploit.get('category', ''), exploit.get('subcategory', '')), '(unmapped)')} |\n"
+        f"| **Judge confidence at promotion** | {exploit.get('confidence', 0.0):.2f} |\n"
+        f"| **Confirmed at** | `{exploit.get('confirmed_at')}` |\n"
         f"| **Status** | {status} |\n\n"
-        f"{body}\n\n"
+        f"{ai_body}\n\n"
+        f"{repro}\n"
+        f"{obs_v_exp}\n"
+        f"{fix_section}\n"
         "---\n\n"
         f"*Generated by the Documentation Agent on "
-        f"{datetime.utcnow().isoformat(timespec='seconds')}Z. "
-        f"This report was machine-generated from the confirmed exploit's stored "
-        f"fields — fact-check the Reproduction section before sharing externally.*\n"
+        f"{datetime.utcnow().isoformat(timespec='seconds')}Z. The Summary, "
+        f"Clinical Impact, and Remediation sections are LLM-written. The Reproduction, "
+        f"Observed vs Expected, and Fix Validation sections are deterministic — copied "
+        f"verbatim from the state store with no LLM in the path.*\n"
     )
 
 
 @traceable(run_type="chain", name="documentation_write_report")
 def write_report(exploit: dict) -> dict:
-    """Generate one vulnerability report. Returns metadata about the write."""
+    """Generate one vulnerability report. Returns metadata about the write.
+
+    Reproduction, Observed vs Expected, and Fix Validation are 100% deterministic
+    — the LLM writes only Summary, Clinical Impact, and Remediation. This makes
+    the parts a senior engineer needs to *reproduce* the bug byte-identical to
+    the state store (no LLM paraphrasing), while letting the LLM contribute
+    narrative quality where it's safe.
+    """
     needs_human_review = (exploit.get("severity") or "").lower() == "critical"
 
     messages = [
@@ -143,25 +286,21 @@ def write_report(exploit: dict) -> dict:
                       temperature=0.3, max_tokens=1024)
 
     if not result["success"]:
-        body = (
-            f"## Summary\n\n"
-            f"_(LLM unavailable — fell back to deterministic template. "
-            f"Error: {result.get('error', 'unknown')})_\n\n"
-            f"Confirmed exploit of `{exploit.get('category')}/{exploit.get('subcategory')}`.\n\n"
-            f"## Reproduction\n\n```\n{exploit.get('attack_sequence_text', '')[:800]}\n```\n\n"
-            f"## Observed vs Expected\n\n"
-            f"**Observed:** {exploit.get('observed_behavior', '')[:400]}\n\n"
-            f"**Expected:** {exploit.get('expected_safe_behavior', '')[:400]}\n\n"
-            f"## Clinical Impact\n\n_(needs manual fill-in — LLM was unavailable)_\n\n"
-            f"## Remediation\n\n_(needs manual fill-in — LLM was unavailable)_\n"
+        ai_body = (
+            f"## Summary\n\n_(LLM unavailable — Summary, Clinical Impact, and "
+            f"Remediation are stubbed. Error: {result.get('error', 'unknown')}. "
+            f"The deterministic sections below — Reproduction, Observed vs Expected, "
+            f"Fix Validation — are unaffected and reflect the state store verbatim.)_\n\n"
+            f"## Clinical Impact\n\n_(needs human fill-in — LLM was unavailable)_\n\n"
+            f"## Remediation\n\n_(needs human fill-in — LLM was unavailable)_"
         )
     else:
         log_cost("documentation", result["model"],
                  result["tokens"]["input"], result["tokens"]["output"],
                  result["cost"])
-        body = result["text"].strip()
+        ai_body = result["text"].strip()
 
-    full_md = _build_full_report(exploit, body, needs_human_review)
+    full_md = _build_full_report(exploit, ai_body)
     out_path = _save_report(exploit["attack_id"], full_md, exploit.get("severity"))
 
     return {
@@ -171,6 +310,7 @@ def write_report(exploit: dict) -> dict:
         "path":              str(out_path),
         "bytes_written":     len(full_md),
         "llm_cost":          result.get("cost", 0.0) if result["success"] else 0.0,
+        "regression_verdict": exploit.get("last_regression_verdict") or "never-replayed",
     }
 
 

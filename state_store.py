@@ -63,6 +63,9 @@ def init_db():
             judge_reasoning TEXT DEFAULT '',
             fixed INTEGER DEFAULT 0,
             fix_validated INTEGER DEFAULT 0,
+            last_regression_verdict TEXT DEFAULT '',
+            last_regression_at TEXT DEFAULT '',
+            last_regression_reasoning TEXT DEFAULT '',
             confirmed_at TEXT NOT NULL,
             FOREIGN KEY (finding_id) REFERENCES findings(id)
         );
