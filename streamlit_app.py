@@ -836,13 +836,44 @@ elif page == "Exploits":
                 "_source": "result-json",
             })
     exploit_rows = exploit_rows + json_derived
+
+    # ── Cross-fill regression status from committed regression_*.json ──
+    # The Regression Harness section already reads these files; reuse the
+    # latest-per-attack_id verdict here so the Exploits page status column
+    # reflects the most recent deterministic replay even when state.db is
+    # empty.
+    reg_status_by_aid = {}   # attack_id -> (verdict, replayed_at, reasoning)
+    for jf in sorted(Path("evals/results").glob("regression_*.json")):
+        try:
+            d = json.loads(jf.read_text())
+        except Exception:
+            continue
+        for r in d.get("results", []):
+            aid = r.get("attack_id")
+            if not aid:
+                continue
+            prior = reg_status_by_aid.get(aid)
+            ts = r.get("replayed_at") or ""
+            if not prior or ts > prior[1]:
+                reg_status_by_aid[aid] = (r.get("verdict"), ts, r.get("reasoning"))
+    for r in exploit_rows:
+        if r.get("last_regression_verdict"):
+            continue
+        hit = reg_status_by_aid.get(r["attack_id"])
+        if hit:
+            r["last_regression_verdict"] = hit[0]
+            r["last_regression_at"] = hit[1]
+            r["last_regression_reasoning"] = hit[2]
+
     if json_derived and not any(r.get("_source") != "result-json" for r in exploit_rows):
+        n_with_reg = sum(1 for r in json_derived if r.get("last_regression_verdict"))
         st.caption(
             f"`state.db` is empty on this deployment — showing {len(json_derived)} "
             f"exploits re-derived from committed `evals/results/*.json` files "
             f"using the same `bypass + confidence ≥ 0.9` gate that `run_attacks.py` "
-            f"applies locally. Regression-replay status is not available without a "
-            f"populated `state.db`."
+            f"applies locally. Regression-replay status (`{n_with_reg}` of "
+            f"`{len(json_derived)}`) is loaded from committed `regression_*.json` "
+            f"exports."
         )
 
     if not exploit_rows:
