@@ -265,15 +265,16 @@ if __name__ == "__main__":
                         help="Skip LLM narration (deterministic-only output).")
     parser.add_argument("--top-n", type=int, default=10,
                         help="Print the top-N ranked sub-vectors (default 10).")
-    parser.add_argument("--run-regression", action="store_true",
-                        help="Run the Regression Harness as the FIRST step (before scoring next target). "
-                             "Implements the rubric requirement: 'Run the full regression suite "
-                             "automatically when triggered by the Orchestrator.' Any pass→fail "
-                             "transition shifts targeting priority toward re-validating the regressed "
-                             "exploit's category before exploring new sub-vectors.")
+    parser.add_argument("--skip-regression", action="store_true",
+                        help="Skip running the Regression Harness as the first step. "
+                             "By default the Orchestrator invokes the Harness automatically before "
+                             "scoring the next target — this implements the rubric requirement "
+                             "'Run the full regression suite automatically when triggered by the "
+                             "Orchestrator.' Use this flag only when you explicitly want to skip "
+                             "(e.g., to inspect Orchestrator scoring in isolation).")
     args = parser.parse_args()
 
-    if args.run_regression:
+    if not args.skip_regression:
         print("Orchestrator → invoking Regression Harness before scoring next target.\n")
         from agents.regression_harness import run_regression
         reg = run_regression()
