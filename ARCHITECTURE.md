@@ -398,18 +398,20 @@ The state store is a single `state.db` SQLite file with five tables (`findings`,
 
 #### 7.1.1 Actual dev spend (empirical)
 
-Cumulative spend across the **14 committed campaign result JSONs** under `results/`, covering **477 attacks** since 2026-05-11:
+Cumulative spend across the **11 committed campaign result JSONs** under `evals/results/`, covering **352 attacks** since 2026-05-11. Numbers below are the exact sum of `triage_cost` + `judge_cost` per attack across every committed run — reproducible by `grep -c '"verdict"' evals/results/*.json` and summing.
 
-| Component | Model | ~Spend | Per-call avg | Notes |
-|---|---|---|---|---|
-| Triage (Tier 1 Judge) | Haiku 4.5 (Anthropic-pinned) | ~$1.05 | ~$0.0010 | ~90% of judgement traffic |
-| Judge (Tier 2 escalation) | Sonnet 4.5 (Anthropic-pinned) | ~$0.30 | ~$0.0050 | only on Triage escalate |
-| Red Team | Llama 3.1 8B Instruct | <$0.01 | ~$0.00005 | adaptive runs only |
-| Orchestrator | Llama 3.1 8B Instruct | $0.00 | — | `--no-llm` narrator path used so far |
-| Documentation | Llama 3.1 8B Instruct | ~$0.01 | ~$0.005 | 2 reports generated (`DE-09`, `DOS-01`) |
-| **Total platform dev spend** | | **~$1.35** | **$0.00284 / attack** | source: campaign result JSONs, `total_cost` field |
+| Component | Model | Spend | Calls | Per-call avg | Notes |
+|---|---|---|---|---|---|
+| Triage (Tier 1 Judge) | Haiku 4.5 (Anthropic-pinned) | **$0.488** | 284 | $0.00172 | ~76% of cases resolve here |
+| Judge (Tier 2 escalation) | Sonnet 4.5 (Anthropic-pinned) | **$0.485** | 69 | $0.00704 | 24.3% empirical escalation rate |
+| Red Team | Llama 3.1 8B Instruct | <$0.01 | a few | ~$0.00005 | only in `run_campaign.py` adaptive runs |
+| Orchestrator | Llama 3.1 8B Instruct | $0.00 | 0 | — | `--no-llm` narrator path used so far |
+| Documentation | Llama 3.1 8B Instruct | ~$0.01 | 2 | ~$0.005 | 2 reports generated (`DE-09`, `DOS-01`) |
+| **Total platform dev spend** | | **$0.97** | | **$0.00277 / attack** | source: campaign result JSONs, `triage_cost` + `judge_cost` columns |
 
-Per-campaign average: **$0.097**. State-store `cost_log` shows less than the JSONs because `state.db` was reset during testing; the committed JSONs are the canonical record.
+Per-campaign average: **$0.088** across 11 runs. State-store `cost_log` shows less than this because `state.db` was reset during testing; the committed JSONs are the canonical record.
+
+**Sonnet-only baseline:** the first two campaigns (2026-05-11) ran Sonnet-as-only-Judge before the Triage tier was wired in — they cost $0.00375/attack averaged across 48 attacks. The two-tier configuration since then costs $0.00277/attack averaged across 304 attacks = **~26% cost reduction**, smaller than a naive "Haiku is 4× cheaper than Sonnet" calculation would predict because 24% of cases still escalate to Sonnet.
 
 **Target-side inference is paid by the operator deploying the Co-Pilot, not the platform.** Each attack triggers ~7-15s of Sonnet inference on the target's synthesis worker — roughly $0.02 per attack from the target's perspective. Both columns are tracked separately below because they have different scaling laws (the operator controls target-side spend by choosing the target's synthesis model).
 
@@ -426,11 +428,11 @@ The **platform cost** column is bounded — it's our LLM spend. The **target-sid
 
 #### 7.1.3 Why this is not cost-per-token × n
 
-If costs were linear we'd just multiply $0.00284 × n and call it done. They aren't:
+If costs were linear we'd just multiply $0.00277 × n and call it done. They aren't:
 
 **Sub-linear forces (cost grows slower than n):**
 
-1. **Triage offload**: ~90% of cases resolve at Haiku 4.5 (~$0.001), not Sonnet (~$0.005). Our empirical $0.00284/attack is already 47% of naive Sonnet-only. As `n` grows the savings compound because Triage's "defended" verdict is sticky.
+1. **Triage offload**: ~76% of cases resolve at Haiku 4.5 ($0.00172/call), not Sonnet ($0.00704/call) — a 4× per-call gap. Net savings vs Sonnet-only baseline: ~26% empirical ($0.00277 vs $0.00375/attack). Savings could grow toward ~70% if the escalation threshold were tightened from `confidence ≥ 0.85` to `≥ 0.92` — at the cost of more false-defended verdicts, which is exactly the asymmetric-error-budget trade-off §3 documents.
 2. **Target-failure short-circuit**: 5xx and timeouts bypass the Judge entirely (`verdict="error"`, $0). At workers=4 we observed 32% target failure (THREAT_MODEL §5.4) — that's a 32% Judge cost saving in any high-concurrency run.
 3. **Cache reuse on regression replay**: Same attack against the same target version yields the same response → same verdict. At 10K+ scale, cached verdicts on `(attack_hash, target_url, target_version_hash)` remove ~80% of Judge cost on regression-style runs.
 4. **Deterministic Red Team mutations cost $0**: `encode` and `fragment` strategies are pure string transforms, no LLM tokens.
