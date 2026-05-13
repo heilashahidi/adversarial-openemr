@@ -294,7 +294,8 @@ st.sidebar.divider()
 
 page = st.sidebar.radio(
     "Navigation",
-    ["Overview", "Coverage Map", "Attack Browser", "Threat Model", "Users", "Architecture"],
+    ["Overview", "Coverage Map", "Attack Browser", "Exploits", "Trends", "Agent Activity",
+     "Threat Model", "Users", "Architecture"],
     label_visibility="collapsed",
 )
 
@@ -762,6 +763,271 @@ elif page == "Attack Browser":
                 st.info(reasoning)
             else:
                 st.caption("(no reasoning provided)")
+
+
+# ── Page: Exploits — Q4 (open / in-progress / resolved) ──
+
+elif page == "Exploits":
+    st.title("Confirmed Exploits")
+    st.caption(
+        "Every confirmed bypass the platform has produced, with current "
+        "regression status. Reads `state_store.exploits` joined with the "
+        "latest `regression_runs` history. Auto-promoted by the gate in "
+        "`run_attacks.py` when verdict=bypass AND confidence ≥ 0.9."
+    )
+
+    import sqlite3
+    try:
+        conn = sqlite3.connect("state.db", timeout=5)
+        conn.row_factory = sqlite3.Row
+        exploit_rows = conn.execute(
+            "SELECT * FROM exploits ORDER BY confirmed_at DESC"
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        st.warning(f"Could not read state.db: {e}")
+        exploit_rows = []
+
+    if not exploit_rows:
+        st.info("No confirmed exploits yet. Run a campaign — any bypass at confidence ≥ 0.9 auto-promotes.")
+    else:
+        # Headline metrics
+        n_total = len(exploit_rows)
+        n_open  = sum(1 for r in exploit_rows if (r["last_regression_verdict"] or "") == "fail")
+        n_fixed = sum(1 for r in exploit_rows if (r["last_regression_verdict"] or "") == "pass")
+        n_drift = sum(1 for r in exploit_rows if (r["last_regression_verdict"] or "") == "inconclusive")
+        n_never = sum(1 for r in exploit_rows if not (r["last_regression_verdict"] or ""))
+
+        c1, c2, c3, c4, c5 = st.columns(5)
+        c1.metric("Total exploits", n_total)
+        c2.metric("🔴 Open",       n_open,  help="last regression verdict = fail")
+        c3.metric("✅ Fixed",      n_fixed, help="last regression verdict = pass")
+        c4.metric("🌀 Drift",      n_drift, help="last regression verdict = inconclusive")
+        c5.metric("⚪ Never replayed", n_never)
+
+        st.divider()
+
+        # Detail rows
+        rows = []
+        for ex in exploit_rows:
+            v = ex["last_regression_verdict"] or ""
+            status_label = {
+                "pass": "✅ Fixed (validated)",
+                "fail": "🔴 Open (bypass persists)",
+                "inconclusive": "🌀 Inconclusive (behavioral drift)",
+                "": "⚪ Never replayed",
+            }.get(v, v)
+            report_path = Path("reports") / f"{ex['attack_id']}.md"
+            report_link = f"[`{report_path.name}`]({REPO_URL}/blob/main/{report_path})" if report_path.exists() else "_(not generated)_"
+            rows.append({
+                "Attack ID":   ex["attack_id"],
+                "Category":    ex["category"],
+                "Subcategory": ex["subcategory"],
+                "Severity":    (ex["severity"] or "").upper(),
+                "Confidence":  f"{ex['confidence']:.2f}",
+                "Status":      status_label,
+                "Last replayed": (ex["last_regression_at"] or "—")[:19].replace("T", " "),
+                "Report":      report_link,
+            })
+        df = pd.DataFrame(rows)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
+        st.divider()
+        st.markdown(
+            "**How status is determined:** the Regression Harness "
+            "(`agents/regression_harness.py`) replays every exploit's attack sequence "
+            "against the live target, classifies the response with rule-based pattern "
+            "matching (no LLM in the replay path), and writes the verdict back to "
+            "`exploits.last_regression_verdict`. A `pass→fail` transition between batches "
+            "is flagged as a new regression. See `ARCHITECTURE.md §4.3` for the full pipeline."
+        )
+
+
+# ── Page: Trends — Q3 (resilience over time) + Q5 (cost scaling rate) ──
+
+elif page == "Trends":
+    st.title("Trends over time")
+    st.caption(
+        "Is the target getting more or less resilient? At what rate is cost scaling? "
+        "Reads every committed `evals/results/attack_results_*.json` file and "
+        "plots the headline numbers by timestamp."
+    )
+
+    results_dir = Path("evals/results")
+    files = sorted(results_dir.glob("attack_results_*.json"))
+    if not files:
+        st.info("No run artifacts in `evals/results/` yet.")
+    else:
+        trend_rows = []
+        for f in files:
+            try:
+                d = json.loads(f.read_text())
+            except Exception:
+                continue
+            ts = d.get("timestamp", f.name.replace("attack_results_", "").replace(".json", ""))
+            s = d.get("summary", {})
+            results = d.get("results", [])
+            total_cost = sum(
+                (r.get("triage_cost", 0) or 0) + (r.get("judge_cost", 0) or 0)
+                for r in results
+            )
+            trend_rows.append({
+                "timestamp":    ts[:19],
+                "total":        d.get("total_attacks", 0),
+                "bypass":       s.get("bypass", 0),
+                "defended":     s.get("defended", 0),
+                "partial":      s.get("partial", 0),
+                "error":        s.get("error", 0),
+                "total_cost":   round(total_cost, 4),
+                "cost_per_atk": round(total_cost / max(1, d.get("total_attacks", 1)), 5),
+                "target":       d.get("target", "unknown"),
+            })
+
+        df = pd.DataFrame(trend_rows).sort_values("timestamp")
+
+        st.subheader("Resilience over time")
+        st.caption(
+            "Fewer bypasses across runs ⇒ target is becoming more resilient. "
+            "Spikes signal new finding or regression."
+        )
+        resil = pd.melt(df, id_vars=["timestamp"], value_vars=["bypass", "defended", "error"],
+                        var_name="verdict", value_name="count")
+        chart_resil = (
+            alt.Chart(resil)
+            .mark_line(point=True)
+            .encode(
+                x=alt.X("timestamp:N", title=None, axis=alt.Axis(labelAngle=-30)),
+                y=alt.Y("count:Q"),
+                color=alt.Color("verdict:N",
+                    scale=alt.Scale(
+                        domain=["bypass", "defended", "error"],
+                        range=[VERDICT_COLOR_HEX["Bypass"],
+                               VERDICT_COLOR_HEX["Defended"],
+                               VERDICT_COLOR_HEX["Error"]]
+                    ),
+                    legend=alt.Legend(orient="bottom", title=None)),
+                tooltip=["timestamp", "verdict", "count"],
+            )
+            .properties(height=260)
+        )
+        st.altair_chart(chart_resil, use_container_width=True)
+
+        st.divider()
+        st.subheader("Cost per run + cost per attack")
+        st.caption(
+            "Total spend per campaign (Triage + Judge combined) and the derived "
+            "cost-per-attack. Cost-per-attack stays roughly flat ⇒ the two-tier Judge "
+            "is keeping marginal cost bounded as case count grows."
+        )
+        cost_df = df[["timestamp", "total_cost", "cost_per_atk"]].copy()
+        cost_long = pd.melt(cost_df, id_vars=["timestamp"], var_name="metric", value_name="dollars")
+        chart_cost = (
+            alt.Chart(cost_long)
+            .mark_line(point=True)
+            .encode(
+                x=alt.X("timestamp:N", title=None, axis=alt.Axis(labelAngle=-30)),
+                y=alt.Y("dollars:Q", title="USD"),
+                color=alt.Color("metric:N", legend=alt.Legend(orient="bottom", title=None)),
+                tooltip=["timestamp", "metric", "dollars"],
+            )
+            .properties(height=240)
+        )
+        st.altair_chart(chart_cost, use_container_width=True)
+
+        st.divider()
+        st.subheader("Raw run history")
+        st.dataframe(df, use_container_width=True, hide_index=True)
+
+
+# ── Page: Agent Activity — Q6 (what is each agent doing, in what order) ──
+
+elif page == "Agent Activity":
+    st.title("Agent Activity")
+    st.caption(
+        "What is each agent doing, and in what order? Reads `state_store.cost_log` "
+        "(every LLM call) joined with `regression_runs` and `campaigns`. For per-call "
+        "trace tree depth — full prompts, responses, latencies — see the LangSmith "
+        "project (operator-only)."
+    )
+
+    import sqlite3
+    try:
+        conn = sqlite3.connect("state.db", timeout=5)
+        conn.row_factory = sqlite3.Row
+        cost_rows = conn.execute(
+            "SELECT * FROM cost_log ORDER BY id DESC LIMIT 200"
+        ).fetchall()
+        reg_rows = conn.execute(
+            "SELECT * FROM regression_runs ORDER BY id DESC LIMIT 50"
+        ).fetchall()
+        conn.close()
+    except Exception as e:
+        st.warning(f"Could not read state.db: {e}")
+        cost_rows = []
+        reg_rows = []
+
+    if not cost_rows:
+        st.info("No agent activity in state.db yet — run a campaign to populate `cost_log`.")
+    else:
+        # Aggregate by agent
+        agent_stats = {}
+        for r in cost_rows:
+            a = r["agent"] or "?"
+            agent_stats.setdefault(a, {"calls": 0, "cost": 0.0, "in_tokens": 0, "out_tokens": 0})
+            agent_stats[a]["calls"]      += 1
+            agent_stats[a]["cost"]       += r["cost_usd"] or 0
+            agent_stats[a]["in_tokens"]  += r["input_tokens"] or 0
+            agent_stats[a]["out_tokens"] += r["output_tokens"] or 0
+
+        st.subheader(f"Agent rollup — last {len(cost_rows)} LLM calls")
+        rollup = pd.DataFrame([
+            {
+                "Agent":  a,
+                "Calls":  s["calls"],
+                "Input tokens":  s["in_tokens"],
+                "Output tokens": s["out_tokens"],
+                "Total cost":  f"${s['cost']:.4f}",
+                "Avg cost / call": f"${s['cost'] / s['calls']:.5f}",
+            }
+            for a, s in sorted(agent_stats.items())
+        ])
+        st.dataframe(rollup, use_container_width=True, hide_index=True)
+
+        st.divider()
+        st.subheader("Activity timeline — most recent 50 calls")
+        st.caption("Newest first. Ordering shows the sequence in which agents fired.")
+        timeline = pd.DataFrame([
+            {
+                "Time":   (r["created_at"] or "")[:19].replace("T", " "),
+                "Agent":  r["agent"],
+                "Model":  r["model"],
+                "Tokens": f'{(r["input_tokens"] or 0):,} → {(r["output_tokens"] or 0):,}',
+                "Cost":   f'${(r["cost_usd"] or 0):.5f}',
+                "Campaign": r["campaign_id"] or "—",
+            }
+            for r in cost_rows[:50]
+        ])
+        st.dataframe(timeline, use_container_width=True, hide_index=True)
+
+        st.divider()
+        st.subheader("Regression Harness — last 50 replays")
+        st.caption("Deterministic, no LLM. One row per (regression batch × exploit).")
+        if reg_rows:
+            reg_df = pd.DataFrame([
+                {
+                    "Time":      (r["replayed_at"] or "")[:19].replace("T", " "),
+                    "Attack ID": r["attack_id"],
+                    "Category":  f'{r["category"]}/{r["subcategory"]}',
+                    "Verdict":   r["verdict"],
+                    "Previous":  r["previous_verdict"] or "—",
+                    "🚨 New regression": "yes" if r["is_new_regression"] else "no",
+                    "Batch":     r["run_batch_id"],
+                }
+                for r in reg_rows
+            ])
+            st.dataframe(reg_df, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No regression runs yet — run `python3 agents/regression_harness.py`.")
 
 
 # ── Page: Threat Model ──

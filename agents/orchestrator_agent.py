@@ -40,11 +40,12 @@ except ImportError:
 
 
 # Scoring weights — see ARCHITECTURE.md §3.1
-W_GAP     = 0.40
-W_THREAT  = 0.30
-W_PARTIAL = 0.15
-W_COST    = 0.10
-W_RECENCY = 0.05
+W_GAP        = 0.35
+W_THREAT     = 0.25
+W_PARTIAL    = 0.15
+W_REGRESSION = 0.15   # rubric: Orchestrator reads the observability layer's regression status
+W_COST       = 0.07
+W_RECENCY    = 0.03
 
 
 # ── Inputs to the scoring formula ─────────────────────────────────────────
@@ -97,9 +98,41 @@ def _recency_hours_by_subvector():
     return out
 
 
+def _regression_status_by_subvector():
+    """{(cat, sub): factor 0..1} — factor is HIGH when there's an open
+    exploit (last regression verdict = fail) or behavioral drift (inconclusive).
+    Read by the Orchestrator's scoring formula so a regressed sub-vector
+    gets prioritized over an untested one of the same threat-rank.
+    """
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT category, subcategory, last_regression_verdict, fix_validated "
+        "FROM exploits"
+    ).fetchall()
+    conn.close()
+
+    out = {}
+    for r in rows:
+        key = (r["category"], r["subcategory"])
+        v = r["last_regression_verdict"] or ""
+        # Open exploits (regression fail) — top priority bump
+        if v == "fail":
+            out[key] = max(out.get(key, 0), 1.0)
+        # Drift (inconclusive) — moderate bump
+        elif v == "inconclusive":
+            out[key] = max(out.get(key, 0), 0.6)
+        # Never replayed but exploit exists — moderate bump
+        elif not v:
+            out[key] = max(out.get(key, 0), 0.4)
+        # Fix validated — no bump (we don't need to re-prioritize)
+        else:
+            out[key] = max(out.get(key, 0), 0.0)
+    return out
+
+
 # ── Scoring ───────────────────────────────────────────────────────────────
 
-def score_subvector(cat, sub, coverage, partials, costs, recency_hrs):
+def score_subvector(cat, sub, coverage, partials, costs, recency_hrs, regression):
     """Return the score + every term that fed into it (auditable)."""
     total_attacks = coverage.get((cat, sub), {}).get("total_attacks", 0)
     gap_factor = 1.0 / (1 + total_attacks)
@@ -110,6 +143,8 @@ def score_subvector(cat, sub, coverage, partials, costs, recency_hrs):
     partial_count = partials.get((cat, sub), 0)
     partial_factor = partial_count / (total_attacks + 1)
 
+    regression_factor = regression.get((cat, sub), 0.0)
+
     dollars = costs.get((cat, sub), 0.0)
     cost_penalty = math.log10(1 + dollars)
 
@@ -117,20 +152,22 @@ def score_subvector(cat, sub, coverage, partials, costs, recency_hrs):
     recency_penalty = max(0, min(168, hrs - 24)) / 168
 
     score = (
-        W_GAP     * gap_factor
-        + W_THREAT  * threat_priority
-        + W_PARTIAL * partial_factor
-        - W_COST    * cost_penalty
-        - W_RECENCY * recency_penalty
+        W_GAP        * gap_factor
+        + W_THREAT     * threat_priority
+        + W_PARTIAL    * partial_factor
+        + W_REGRESSION * regression_factor
+        - W_COST       * cost_penalty
+        - W_RECENCY    * recency_penalty
     )
 
     return {
         "score": round(score, 4),
-        "gap_factor":      round(gap_factor, 4),
-        "threat_priority": round(threat_priority, 4),
-        "partial_factor":  round(partial_factor, 4),
-        "cost_penalty":    round(cost_penalty, 4),
-        "recency_penalty": round(recency_penalty, 4),
+        "gap_factor":         round(gap_factor, 4),
+        "threat_priority":    round(threat_priority, 4),
+        "partial_factor":     round(partial_factor, 4),
+        "regression_factor":  round(regression_factor, 4),
+        "cost_penalty":       round(cost_penalty, 4),
+        "recency_penalty":    round(recency_penalty, 4),
         "total_attacks":   total_attacks,
         "partial_count":   partial_count,
         "dollars_spent":   round(dollars, 4),
@@ -140,15 +177,16 @@ def score_subvector(cat, sub, coverage, partials, costs, recency_hrs):
 
 
 def rank_subvectors():
-    coverage = _coverage_map()
-    partials = _partial_count_by_subvector()
-    costs    = _cost_by_subvector()
-    recency  = _recency_hours_by_subvector()
+    coverage   = _coverage_map()
+    partials   = _partial_count_by_subvector()
+    costs      = _cost_by_subvector()
+    recency    = _recency_hours_by_subvector()
+    regression = _regression_status_by_subvector()
 
     scored = []
     for cat in ATTACK_CATEGORIES:
         for sub in ATTACK_SUBCATEGORIES.get(cat, []):
-            metrics = score_subvector(cat, sub, coverage, partials, costs, recency)
+            metrics = score_subvector(cat, sub, coverage, partials, costs, recency, regression)
             scored.append({"category": cat, "subcategory": sub, **metrics})
     scored.sort(key=lambda r: -r["score"])
     return scored
