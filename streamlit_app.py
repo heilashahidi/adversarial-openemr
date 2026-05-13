@@ -1176,7 +1176,10 @@ elif page == "Agent Activity":
                         "created_at": ts,
                     })
         synth.sort(key=lambda r: r["created_at"] or "", reverse=True)
-        cost_rows = synth[:200]
+        # No cap on the JSON-derived rollup: the committed JSONs are bounded
+        # (~353 calls today) and the rollup is supposed to reflect "everything
+        # that ran", not "the most recent 200". Timeline still slices to 50.
+        cost_rows = synth
         json_synthesized = bool(cost_rows)
 
     if json_synthesized:
@@ -1201,7 +1204,9 @@ elif page == "Agent Activity":
             agent_stats[a]["in_tokens"]  += r["input_tokens"] or 0
             agent_stats[a]["out_tokens"] += r["output_tokens"] or 0
 
-        st.subheader(f"Agent rollup — last {len(cost_rows)} LLM calls")
+        st.subheader(
+            f"Agent rollup — {'all ' if json_synthesized else 'last '}{len(cost_rows)} LLM calls"
+        )
         rollup = pd.DataFrame([
             {
                 "Agent":  a,
