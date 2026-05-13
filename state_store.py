@@ -54,10 +54,13 @@ def init_db():
             finding_id INTEGER NOT NULL,
             attack_id TEXT UNIQUE NOT NULL,
             category TEXT NOT NULL,
+            subcategory TEXT DEFAULT '',
             severity TEXT NOT NULL,
+            confidence REAL DEFAULT 0.0,
             attack_sequence TEXT NOT NULL,
             expected_safe_behavior TEXT NOT NULL,
             observed_behavior TEXT NOT NULL,
+            judge_reasoning TEXT DEFAULT '',
             fixed INTEGER DEFAULT 0,
             fix_validated INTEGER DEFAULT 0,
             confirmed_at TEXT NOT NULL,
@@ -211,6 +214,67 @@ def add_exploit(finding_id, attack_id, category, severity, attack_sequence, expe
     )
     conn.commit()
     conn.close()
+
+
+def promote_finding_to_exploit(attack_id, expected_safe_text, confidence_threshold=0.9):
+    """
+    Promotion gate (ARCHITECTURE.md §4.2):
+    if a finding's verdict is 'bypass' AND confidence >= τ, freeze it into the
+    exploits table as an ExploitArtifact. Idempotent — re-promoting the same
+    attack_id is a no-op (UNIQUE constraint on attack_id).
+
+    Returns the exploit row id, or None if the finding didn't qualify.
+    """
+    conn = _get_conn()
+    f = conn.execute(
+        "SELECT id, attack_id, category, subcategory, severity, confidence, "
+        "attack_payload, target_response, judge_reasoning "
+        "FROM findings WHERE attack_id=?",
+        (attack_id,)
+    ).fetchone()
+    if not f:
+        conn.close()
+        return None
+
+    f = dict(f)
+    # Get the verdict separately (column name might collide)
+    verdict_row = conn.execute("SELECT verdict FROM findings WHERE attack_id=?", (attack_id,)).fetchone()
+    verdict = verdict_row["verdict"] if verdict_row else ""
+
+    if verdict != "bypass" or (f.get("confidence") or 0.0) < confidence_threshold:
+        conn.close()
+        return None
+
+    # Idempotency check
+    existing = conn.execute("SELECT id FROM exploits WHERE attack_id=?", (attack_id,)).fetchone()
+    if existing:
+        conn.close()
+        return existing["id"]
+
+    # attack_payload may be JSON-encoded (multi-turn) or plain string
+    try:
+        seq = json.loads(f["attack_payload"])
+        if not isinstance(seq, list):
+            seq = [f["attack_payload"]]
+    except (json.JSONDecodeError, TypeError):
+        seq = [f["attack_payload"]]
+
+    conn.execute(
+        """INSERT INTO exploits
+           (finding_id, attack_id, category, subcategory, severity, confidence,
+            attack_sequence, expected_safe_behavior, observed_behavior,
+            judge_reasoning, confirmed_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (f["id"], attack_id, f["category"], f.get("subcategory", ""),
+         f.get("severity", "high"), f.get("confidence", 0.0),
+         json.dumps(seq), expected_safe_text,
+         f.get("target_response", ""), f.get("judge_reasoning", ""),
+         datetime.utcnow().isoformat())
+    )
+    exploit_id = conn.execute("SELECT id FROM exploits WHERE attack_id=?", (attack_id,)).fetchone()["id"]
+    conn.commit()
+    conn.close()
+    return exploit_id
 
 
 def get_exploits(fixed=None):

@@ -91,8 +91,20 @@ Four-stage W3 deliverable:
 |---|---|---|
 | 1 — Stand up the target | Live URL above, this section | ✅ |
 | 2 — Threat Model | [`THREAT_MODEL.md`](./THREAT_MODEL.md) — 26 sub-vectors across 6 categories, OWASP LLM mapping, risk matrix | ✅ |
-| 3 — Seed Attack Suite + Agent Prototype | [`evals/seed_attacks.py`](./evals/seed_attacks.py) (40 cases, 100% sub-vector coverage), [`agents/judge_agent.py`](./agents/judge_agent.py), [`agents/triage_agent.py`](./agents/triage_agent.py) | ✅ |
+| 3 — Seed Attack Suite + Agent Prototype | [`evals/seed_attacks.py`](./evals/seed_attacks.py) (40 cases, 100% sub-vector coverage), Triage + Judge running live | ✅ |
 | 4 — Platform Architecture | [`ARCHITECTURE.md`](./ARCHITECTURE.md) — 5-agent design, message schemas, scoring formula, regression pipeline | ✅ |
+
+### All five agents implemented
+
+| Agent | File | Model | Live? |
+|---|---|---|---|
+| Orchestrator | [`agents/orchestrator_agent.py`](./agents/orchestrator_agent.py) | Llama 3.1 8B | ✅ |
+| Red Team | [`agents/red_team_agent.py`](./agents/red_team_agent.py) | Mistral 7B + deterministic ops | ✅ |
+| Triage (Tier-1) | [`agents/triage_agent.py`](./agents/triage_agent.py) | Haiku 4.5 (Anthropic-pinned) | ✅ |
+| Judge (Tier-2) | [`agents/judge_agent.py`](./agents/judge_agent.py) | Sonnet 4.5 (Anthropic-pinned) | ✅ |
+| Documentation | [`agents/documentation_agent.py`](./agents/documentation_agent.py) | Mistral 7B | ✅ |
+
+Plus the **Regression Harness** ([`agents/regression_harness.py`](./agents/regression_harness.py)) — deterministic replay of confirmed exploits, rule-based pass/fail/inconclusive classification, no LLM in the replay path.
 
 ## Dashboard pages
 
