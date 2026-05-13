@@ -791,34 +791,59 @@ elif page == "Exploits":
     if not exploit_rows:
         st.info("No confirmed exploits yet. Run a campaign — any bypass at confidence ≥ 0.9 auto-promotes.")
     else:
-        # Headline metrics
-        n_total = len(exploit_rows)
-        n_open  = sum(1 for r in exploit_rows if (r["last_regression_verdict"] or "") == "fail")
-        n_fixed = sum(1 for r in exploit_rows if (r["last_regression_verdict"] or "") == "pass")
-        n_drift = sum(1 for r in exploit_rows if (r["last_regression_verdict"] or "") == "inconclusive")
-        n_never = sum(1 for r in exploit_rows if not (r["last_regression_verdict"] or ""))
+        # ── Rubric's three states: Open / In Progress / Resolved ──
+        # mapping from internal last_regression_verdict → rubric state
+        def _rubric_state(verdict: str) -> str:
+            v = (verdict or "").lower()
+            if v == "fail":
+                return "open"
+            if v == "pass":
+                return "resolved"
+            # inconclusive (drift) or never replayed → both "in progress"
+            # (fix work may be in flight; the harness hasn't confirmed yet)
+            return "in_progress"
 
-        c1, c2, c3, c4, c5 = st.columns(5)
+        n_total = len(exploit_rows)
+        states = [_rubric_state(r["last_regression_verdict"]) for r in exploit_rows]
+        n_open        = states.count("open")
+        n_in_progress = states.count("in_progress")
+        n_resolved    = states.count("resolved")
+
+        c1, c2, c3, c4 = st.columns(4)
         c1.metric("Total exploits", n_total)
-        c2.metric("🔴 Open",       n_open,  help="last regression verdict = fail")
-        c3.metric("✅ Fixed",      n_fixed, help="last regression verdict = pass")
-        c4.metric("🌀 Drift",      n_drift, help="last regression verdict = inconclusive")
-        c5.metric("⚪ Never replayed", n_never)
+        c2.metric("🔴 Open",        n_open,
+                  help="last regression verdict = fail (bypass persists)")
+        c3.metric("🚧 In Progress", n_in_progress,
+                  help="never replayed yet OR last verdict = inconclusive (drift). "
+                       "Fix work may be in flight; the harness hasn't confirmed yet.")
+        c4.metric("✅ Resolved",    n_resolved,
+                  help="last regression verdict = pass (fix validated)")
 
         st.divider()
 
-        # Detail rows
+        # Detail rows — Status uses the rubric's three labels, with the
+        # internal verdict shown for transparency
         rows = []
         for ex in exploit_rows:
             v = ex["last_regression_verdict"] or ""
-            status_label = {
-                "pass": "✅ Fixed (validated)",
-                "fail": "🔴 Open (bypass persists)",
-                "inconclusive": "🌀 Inconclusive (behavioral drift)",
-                "": "⚪ Never replayed",
+            state = _rubric_state(v)
+            internal_detail = {
+                "fail":         "regression harness verdict = fail",
+                "pass":         "regression harness verdict = pass",
+                "inconclusive": "regression harness verdict = inconclusive (drift)",
+                "":             "never replayed (run regression harness)",
             }.get(v, v)
+            status_label = {
+                "open":        f"🔴 Open — {internal_detail}",
+                "in_progress": f"🚧 In Progress — {internal_detail}",
+                "resolved":    f"✅ Resolved — {internal_detail}",
+            }[state]
+
             report_path = Path("reports") / f"{ex['attack_id']}.md"
-            report_link = f"[`{report_path.name}`]({REPO_URL}/blob/main/{report_path})" if report_path.exists() else "_(not generated)_"
+            report_link = (
+                f"[`{report_path.name}`]({REPO_URL}/blob/main/{report_path})"
+                if report_path.exists() else "_(not generated)_"
+            )
             rows.append({
                 "Attack ID":   ex["attack_id"],
                 "Category":    ex["category"],
@@ -834,12 +859,13 @@ elif page == "Exploits":
 
         st.divider()
         st.markdown(
-            "**How status is determined:** the Regression Harness "
-            "(`agents/regression_harness.py`) replays every exploit's attack sequence "
-            "against the live target, classifies the response with rule-based pattern "
-            "matching (no LLM in the replay path), and writes the verdict back to "
-            "`exploits.last_regression_verdict`. A `pass→fail` transition between batches "
-            "is flagged as a new regression. See `ARCHITECTURE.md §4.3` for the full pipeline."
+            "**State mapping (rubric → internal):** Open = regression `fail`; "
+            "In Progress = regression `inconclusive` OR never replayed yet "
+            "(fix may be in flight, harness hasn't confirmed); "
+            "Resolved = regression `pass` (fix validated deterministically). "
+            "The internal verdict is shown alongside the rubric label so the operator "
+            "can see exactly which state we're in. See `ARCHITECTURE.md §4.3` for the "
+            "full pipeline."
         )
 
 
@@ -884,29 +910,41 @@ elif page == "Trends":
             })
 
         df = pd.DataFrame(trend_rows).sort_values("timestamp")
+        # Add rate columns so the resilience trend is comparable across runs
+        # of different sizes (early runs = 24 cases, later runs = 40 cases).
+        df["defense_rate"] = (df["defended"] / df["total"].clip(lower=1)).round(4)
+        df["bypass_rate"]  = (df["bypass"]   / df["total"].clip(lower=1)).round(4)
+        df["error_rate"]   = (df["error"]    / df["total"].clip(lower=1)).round(4)
 
-        st.subheader("Resilience over time")
+        st.subheader("Resilience over time (rates, not absolute counts)")
         st.caption(
-            "Fewer bypasses across runs ⇒ target is becoming more resilient. "
-            "Spikes signal new finding or regression."
+            "Plotting **rates** rather than absolute counts — runs have different "
+            "case totals (24 → 25 → 36 → 40 across the suite's evolution), so "
+            "absolute counts would falsely show defense 'going up' when the "
+            "underlying rate is essentially flat. Defense rate trending upward = "
+            "target getting more resilient; bypass rate trending upward = target "
+            "weakening or platform finding new vulnerabilities."
         )
-        resil = pd.melt(df, id_vars=["timestamp"], value_vars=["bypass", "defended", "error"],
-                        var_name="verdict", value_name="count")
+        resil = pd.melt(
+            df, id_vars=["timestamp"],
+            value_vars=["defense_rate", "bypass_rate", "error_rate"],
+            var_name="metric", value_name="rate",
+        )
         chart_resil = (
             alt.Chart(resil)
             .mark_line(point=True)
             .encode(
                 x=alt.X("timestamp:N", title=None, axis=alt.Axis(labelAngle=-30)),
-                y=alt.Y("count:Q"),
-                color=alt.Color("verdict:N",
+                y=alt.Y("rate:Q", axis=alt.Axis(format=".0%"), scale=alt.Scale(domain=[0, 1])),
+                color=alt.Color("metric:N",
                     scale=alt.Scale(
-                        domain=["bypass", "defended", "error"],
-                        range=[VERDICT_COLOR_HEX["Bypass"],
-                               VERDICT_COLOR_HEX["Defended"],
+                        domain=["defense_rate", "bypass_rate", "error_rate"],
+                        range=[VERDICT_COLOR_HEX["Defended"],
+                               VERDICT_COLOR_HEX["Bypass"],
                                VERDICT_COLOR_HEX["Error"]]
                     ),
                     legend=alt.Legend(orient="bottom", title=None)),
-                tooltip=["timestamp", "verdict", "count"],
+                tooltip=["timestamp", "metric", alt.Tooltip("rate:Q", format=".1%")],
             )
             .properties(height=260)
         )
@@ -937,6 +975,20 @@ elif page == "Trends":
         st.divider()
         st.subheader("Raw run history")
         st.dataframe(df, use_container_width=True, hide_index=True)
+
+        st.divider()
+        st.info(
+            "**Target version tracking — honest limitation.** Every run records "
+            "`target_url` (always `openemr.146-190-75-148.sslip.io` in our case) "
+            "but the Co-Pilot does not expose a `/version` endpoint, so we cannot "
+            "distinguish 'Co-Pilot v1.0' from 'Co-Pilot v1.1' if it were redeployed "
+            "at the same URL. We treat each timestamped run as a snapshot of the "
+            "target at that moment; consecutive runs separated by a target redeploy "
+            "would show up as a step-change in the resilience curve above. To track "
+            "literal target versions, the target itself would need to surface a "
+            "build identifier (commit SHA, semver) in `/health` — which we'd then "
+            "store in the result JSON's `target_version` field."
+        )
 
 
 # ── Page: Agent Activity — Q6 (what is each agent doing, in what order) ──
