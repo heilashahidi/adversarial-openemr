@@ -65,6 +65,41 @@ def load_results():
 
 
 @st.cache_data
+def load_all_attacks_latest():
+    """
+    Aggregate every committed `evals/results/attack_results_*.json` file,
+    keeping the most recent verdict per attack_id. Returns a dict in the
+    same shape as a single result file ({"results": [...], "total_attacks": N}).
+
+    Coverage Map and Attack Browser use this instead of `load_results()` so a
+    single-attack debug run (which overwrites latest_results.json with just
+    one record) doesn't make the dashboard look like only one attack has ever
+    run. Newest-verdict-wins per attack_id.
+    """
+    by_aid = {}  # attack_id -> (timestamp, record)
+    for jf in sorted(Path("evals/results").glob("attack_results_*.json")):
+        try:
+            d = json.loads(jf.read_text())
+        except Exception:
+            continue
+        for r in d.get("results", []):
+            aid = r.get("attack_id")
+            if not aid:
+                continue
+            ts = r.get("timestamp") or d.get("timestamp", "")
+            prior = by_aid.get(aid)
+            if not prior or ts > prior[0]:
+                by_aid[aid] = (ts, r)
+    rows = [r for (_, r) in sorted(by_aid.values(), key=lambda x: x[0], reverse=True)]
+    return {
+        "results": rows,
+        "total_attacks": len(rows),
+        "_aggregated": True,
+        "_n_source_files": len(list(Path("evals/results").glob("attack_results_*.json"))),
+    }
+
+
+@st.cache_data
 def load_markdown(name: str) -> str:
     p = Path(name)
     return p.read_text() if p.exists() else f"_(missing: {name})_"
@@ -548,17 +583,24 @@ patient data, multi-turn escalation, retrieval-output injection.
 elif page == "Coverage Map":
     st.title("Coverage Map")
     st.caption(
-        "Per-(category × subcategory) coverage from the latest run. "
+        "Per-(category × subcategory) coverage aggregated across every committed "
+        "`evals/results/attack_results_*.json` file (newest verdict per `attack_id` wins). "
         "Sub-vectors come from `THREAT_MODEL.md` and `config.ATTACK_SUBCATEGORIES` — "
         "rows that show `Untested` are gaps the Orchestrator should target next."
     )
 
-    if not results:
-        st.warning("No run data available.")
+    coverage_data = load_all_attacks_latest()
+    rs_for_coverage = coverage_data.get("results", [])
+    if not rs_for_coverage:
+        st.warning("No committed result JSONs found in `evals/results/`.")
         st.stop()
+    st.caption(
+        f"Aggregated from **{coverage_data['_n_source_files']} committed result files** — "
+        f"showing the latest verdict for each of **{len(rs_for_coverage)} unique attacks**."
+    )
 
     coverage = defaultdict(lambda: {"bypass": 0, "defended": 0, "partial": 0, "error": 0})
-    for r in results.get("results", []):
+    for r in rs_for_coverage:
         key = (r.get("category", "?"), r.get("subcategory", "?"))
         coverage[key][r.get("verdict", "error")] += 1
 
@@ -669,13 +711,21 @@ elif page == "Coverage Map":
 
 elif page == "Attack Browser":
     st.title("Attack Browser")
-    st.caption("Every adversarial test case, the target's response, and the Judge's verdict.")
+    st.caption(
+        "Every adversarial test case, the target's response, and the Judge's verdict. "
+        "Aggregated across every committed result JSON — one row per unique `attack_id` "
+        "using the most recent verdict."
+    )
 
-    if not results:
-        st.warning("No run data available.")
+    browser_data = load_all_attacks_latest()
+    rs = browser_data.get("results", [])
+    if not rs:
+        st.warning("No committed result JSONs found in `evals/results/`.")
         st.stop()
-
-    rs = results.get("results", [])
+    st.caption(
+        f"Showing **{len(rs)} unique attacks** aggregated from "
+        f"**{browser_data['_n_source_files']} result files**."
+    )
 
     c1, c2, c3, c4 = st.columns(4)
     f_category = c1.selectbox("Category", ["(all)"] + sorted({r.get("category", "?") for r in rs}))
