@@ -81,6 +81,27 @@ def init_db():
             created_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS regression_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_batch_id TEXT NOT NULL,
+            exploit_id INTEGER NOT NULL,
+            attack_id TEXT NOT NULL,
+            category TEXT NOT NULL,
+            subcategory TEXT DEFAULT '',
+            verdict TEXT NOT NULL,
+            reasoning TEXT DEFAULT '',
+            response_preview TEXT DEFAULT '',
+            status_code INTEGER DEFAULT 0,
+            previous_verdict TEXT DEFAULT '',
+            is_new_regression INTEGER DEFAULT 0,
+            target_url TEXT DEFAULT '',
+            replayed_at TEXT NOT NULL,
+            FOREIGN KEY (exploit_id) REFERENCES exploits(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_regression_runs_exploit ON regression_runs(exploit_id);
+        CREATE INDEX IF NOT EXISTS idx_regression_runs_batch ON regression_runs(run_batch_id);
+
         CREATE TABLE IF NOT EXISTS campaigns (
             id TEXT PRIMARY KEY,
             category TEXT NOT NULL,
@@ -288,6 +309,72 @@ def get_exploits(fixed=None):
         query += " WHERE fixed=?"
         params.append(int(fixed))
     rows = conn.execute(query, params).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# ── Regression Runs (versioned history) ──
+
+def insert_regression_run(run_batch_id, exploit_id, attack_id, category, subcategory,
+                          verdict, reasoning, response_preview, status_code,
+                          previous_verdict=None, target_url=None):
+    """
+    Append one row per (regression batch × exploit). The exploits table tracks
+    the LATEST verdict; this table preserves the full history so an operator
+    can answer 'when did this regress?' or 'has this ever passed?'.
+
+    Returns is_new_regression — 1 iff this is a `pass → fail` transition
+    (a previously-fixed vulnerability has reappeared).
+    """
+    is_new_regression = int(previous_verdict == "pass" and verdict == "fail")
+    conn = _get_conn()
+    conn.execute(
+        "INSERT INTO regression_runs "
+        "(run_batch_id, exploit_id, attack_id, category, subcategory, verdict, "
+        " reasoning, response_preview, status_code, previous_verdict, "
+        " is_new_regression, target_url, replayed_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (run_batch_id, exploit_id, attack_id, category, subcategory or "", verdict,
+         reasoning or "", response_preview or "", status_code or 0,
+         previous_verdict or "", is_new_regression, target_url or "",
+         datetime.utcnow().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+    return is_new_regression
+
+
+def get_last_regression_verdict(exploit_id):
+    """Return the most recent prior verdict for this exploit, or None if never replayed."""
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT verdict FROM regression_runs WHERE exploit_id=? "
+        "ORDER BY id DESC LIMIT 1",
+        (exploit_id,),
+    ).fetchone()
+    conn.close()
+    return row["verdict"] if row else None
+
+
+def get_regression_history(exploit_id, limit=20):
+    """Return the last N regression runs for one exploit, newest first."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT * FROM regression_runs WHERE exploit_id=? "
+        "ORDER BY id DESC LIMIT ?",
+        (exploit_id, limit),
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_regression_batch(run_batch_id):
+    """All rows belonging to one harness invocation."""
+    conn = _get_conn()
+    rows = conn.execute(
+        "SELECT * FROM regression_runs WHERE run_batch_id=? ORDER BY id",
+        (run_batch_id,),
+    ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 

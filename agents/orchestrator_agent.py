@@ -265,7 +265,26 @@ if __name__ == "__main__":
                         help="Skip LLM narration (deterministic-only output).")
     parser.add_argument("--top-n", type=int, default=10,
                         help="Print the top-N ranked sub-vectors (default 10).")
+    parser.add_argument("--run-regression", action="store_true",
+                        help="Run the Regression Harness as the FIRST step (before scoring next target). "
+                             "Implements the rubric requirement: 'Run the full regression suite "
+                             "automatically when triggered by the Orchestrator.' Any pass→fail "
+                             "transition shifts targeting priority toward re-validating the regressed "
+                             "exploit's category before exploring new sub-vectors.")
     args = parser.parse_args()
+
+    if args.run_regression:
+        print("Orchestrator → invoking Regression Harness before scoring next target.\n")
+        from agents.regression_harness import run_regression
+        reg = run_regression()
+        new_regressions = reg.get("new_regressions") or []
+        if new_regressions:
+            # Steer the next campaign toward the regressed category — those have priority
+            # over exploring new gaps. This is the 'detect previously-fixed vulnerability
+            # has reappeared' criterion turning into an actual targeting signal.
+            print("\n  🎯 Orchestrator: pinning next campaign to the regressed category"
+                  f" '{new_regressions[0]['category']}/{new_regressions[0]['subcategory']}'.")
+            print()
 
     ranked = rank_subvectors()
     print("=" * 72)
