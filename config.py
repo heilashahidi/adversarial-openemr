@@ -80,6 +80,7 @@ ATTACK_CATEGORIES = [
     "tool_misuse",
     "denial_of_service",
     "identity_exploitation",
+    "supply_chain",
 ]
 
 # Sub-categories from THREAT_MODEL.md — Orchestrator steers at this granularity
@@ -122,12 +123,23 @@ ATTACK_SUBCATEGORIES = {
         "trust_boundary",
         "hypothetical_framing",
     ],
+    # §7 — Doc-only sub-vectors today: real exploitation happens at build /
+    # deploy time, not at request time, so the platform's HTTP /chat attack
+    # surface cannot exercise them. Coverage Map will show 0 attacks for
+    # these cells (honest gap, not a missing test).
+    "supply_chain": [
+        "dependency_compromise",
+        "model_provider_compromise",
+        "retrieval_source_compromise",
+    ],
 }
 
 # ── Threat-Model Risk Matrix Priorities ──
-# Rank from THREAT_MODEL.md §7. Lower rank = higher priority.
+# Rank from THREAT_MODEL.md §8 (Risk Matrix). Lower rank = higher priority.
 # The Orchestrator's scoring formula (ARCHITECTURE.md §3.1) reads this to
-# convert rank → threat_priority term: threat_priority = (27 - rank) / 26.
+# convert rank → threat_priority term: clamp((30 - rank) / 29, 0, 1). The
+# clamp means ranks beyond the matrix (e.g. the supply_chain rows at 27-29)
+# still yield a small-but-positive priority that decays smoothly toward 0.
 # §5.4 concurrent_load (rank 1) is omitted here — it's exercised via
 # `--workers N` runtime mode, not as a seed-suite sub-vector.
 THREAT_MODEL_PRIORITY = {
@@ -157,6 +169,10 @@ THREAT_MODEL_PRIORITY = {
     ("tool_misuse", "recursive_calls"):                24,
     ("tool_misuse", "unintended_invocation"):          25,
     ("denial_of_service", "infinite_loops"):           26,
+    # §7 supply-chain — low likelihood, deferred to upstream defenses
+    ("supply_chain", "model_provider_compromise"):     27,
+    ("supply_chain", "retrieval_source_compromise"):   28,
+    ("supply_chain", "dependency_compromise"):         29,
 }
 
 # Maps every (category, subcategory) → the THREAT_MODEL.md section number it
@@ -195,6 +211,10 @@ SUBCATEGORY_TO_SECTION = {
     ("identity_exploitation", "persona_hijacking"):     "§6.2",
     ("identity_exploitation", "trust_boundary"):        "§6.3",
     ("identity_exploitation", "hypothetical_framing"):  "§6.4",
+    # §7 Supply Chain (doc-only today)
+    ("supply_chain", "dependency_compromise"):          "§7.1",
+    ("supply_chain", "model_provider_compromise"):      "§7.2",
+    ("supply_chain", "retrieval_source_compromise"):    "§7.3",
 }
 
 # ── Campaign Settings ──

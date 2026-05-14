@@ -20,7 +20,7 @@ This threat model maps the adversarial attack surface of the Clinical Co-Pilot �
 
 **Platform prioritization order:** (1) data exfiltration (HTTP-layer §2.4 first, then PHI / cross-patient / authz), (2) prompt injection — widest attack surface, (3) identity exploitation — targets Week 2 safety boundaries, (4) tool misuse and cost amplification, (5) state corruption.
 
-**Empirical baseline (40-case live run, 2026-05-12):** 1 confirmed bypass (§2.4 above), 38 defended at ≥0.92 confidence, 1 target failure (PI-04 HTTP 500 on a base64 payload — a separate signal worth follow-up). 26 of 26 sub-vectors below have at least one exercised seed case. Each campaign re-probes §2.4 (DE-09) so any future remediation is detected immediately. A second empirical finding — §5.4 concurrent-load degradation — surfaced while implementing parallel target execution: the platform observed a **32% failure rate at concurrency=4** (HTTP 502 / 60s timeouts), exercised via `run_attacks.py --workers 4`.
+**Empirical baseline (40-case live run, 2026-05-12):** 1 confirmed bypass (§2.4 above), 38 defended at ≥0.92 confidence, 1 target failure (PI-04 HTTP 500 on a base64 payload — a separate signal worth follow-up). 26 of 26 exercisable sub-vectors below have at least one seed case; §7 supply-chain (3 sub-vectors) is doc-only. Each campaign re-probes §2.4 (DE-09) so any future remediation is detected immediately. A second empirical finding — §5.4 concurrent-load degradation — surfaced while implementing parallel target execution: the platform observed a **32% failure rate at concurrency=4** (HTTP 502 / 60s timeouts), exercised via `run_attacks.py --workers 4`.
 
 ---
 
@@ -392,7 +392,49 @@ The fact that we have been running the entire 24-case adversarial suite with `ta
 
 ---
 
-## 7. Risk Matrix
+## 7. Supply Chain
+
+> **Doc-only category.** Every sub-vector here is real attack surface the Co-Pilot inherits from its build/deploy/upstream pipeline, but the platform's only attack vector today is HTTP POST to `/chat` — which cannot exercise a malicious pip dependency, a compromised model-provider response, or a poisoned upstream content source. These sub-vectors are documented so the threat model is complete and the Coverage Map shows the honest gap (cells render with 0 attacks). A future expansion of the platform's attack surface (file upload via `/extract`, mocked upstream provider, etc.) would unblock seed coverage. Maps to OWASP LLM05 (Supply Chain Vulnerabilities).
+
+### 7.1 Dependency Compromise
+
+| Attribute | Detail |
+|---|---|
+| **Surface** | Python runtime dependencies in the Co-Pilot's container — direct (`requirements.txt`) and transitive |
+| **Mechanism** | (a) Typosquatted package (`anthropic-sdk` vs the real `anthropic`); (b) Compromised upstream release of a real dependency (compromised maintainer account); (c) Pinned commit replaced via Git ref ambiguity; (d) Post-install scripts in a setup.py that exfiltrate env vars at install time |
+| **Impact** | Arbitrary code execution inside the Co-Pilot's process — full PHI access, credential exfiltration, persistent backdoor. Affects every patient and every clinician. Maps to OWASP LLM05 |
+| **Difficulty** | High to land; very high impact per success — a single compromised dep can affect every downstream deployment |
+| **Existing defenses** | Unknown — depends on whether the build pipeline pins exact versions, hashes lockfiles, scans dependencies (Dependabot / pip-audit / Snyk) |
+| **Gaps** | The repo does not commit a hash-pinned lockfile (`requirements.txt` uses range or no versions). No CI step for dependency vulnerability scanning visible in the threat model |
+| **Tested by** | None — not exercisable via /chat. Documented as a gap |
+
+### 7.2 Model Provider Compromise
+
+| Attribute | Detail |
+|---|---|
+| **Surface** | Anthropic API (or whichever upstream LLM provider serves the synthesis worker) — every `/chat` invocation routes through it. Same applies to the Co-Pilot's embedding provider if one is used |
+| **Mechanism** | (a) Insider at the provider crafts a per-customer system override; (b) Provider-side prompt-cache poisoning; (c) MITM if a non-pinned cert path exists; (d) Provider routing change silently swaps the underlying model (the platform's own Judge guards against this via OpenRouter provider pinning, see ARCHITECTURE.md §1.4 — the Co-Pilot does not necessarily) |
+| **Impact** | Universal — every clinical answer is shaped by the compromised upstream. Defenses at the agent layer (system prompts, refusal rules) are downstream of this surface and offer no protection. Maps to OWASP LLM05 |
+| **Difficulty** | Extremely high to execute (requires provider-side access or sophisticated MITM); catastrophic if achieved |
+| **Existing defenses** | TLS pinning unknown. Output integrity is purely behavioral (refusal evals would catch obvious provider-side jailbreaks but not subtle clinical-content manipulation) |
+| **Gaps** | No structural integrity check on synthesis responses. No second-provider cross-validation for high-stakes clinical recommendations |
+| **Tested by** | None — not exercisable via /chat. Documented as a gap |
+
+### 7.3 Retrieval Source Compromise
+
+| Attribute | Detail |
+|---|---|
+| **Surface** | Upstream content the corpus ingests — UpToDate scrapes, PubMed indexes, internal clinical-guideline document repositories — *before* it lands in the retrievable corpus that §3.3 covers |
+| **Mechanism** | (a) Attacker gains write access to an upstream wiki or guideline source; (b) Attacker compromises the ingestion pipeline (scraper / ETL) and rewrites content in transit; (c) DNS hijack of an upstream source URL redirects the scraper to attacker-controlled content |
+| **Impact** | Poisoned content lands in the corpus and is retrieved by `evidence_retriever` on every query that matches. Distinct from §3.3 corpus_poisoning by being *upstream of the corpus* — §3.3 assumes the attacker has corpus write access; §7.3 assumes the attacker only has upstream-source access. Both arrive at the same downstream blast radius |
+| **Difficulty** | High — requires either upstream-source compromise or pipeline access |
+| **Existing defenses** | Citations link to source IDs but don't verify upstream provenance. No checksum/signature verification on ingested content visible in the architecture |
+| **Gaps** | No retrieval-time integrity check on corpus chunks. No ingest-time signature verification on upstream sources. No "this dose is outside the accepted range" sanity-check that would catch dangerous content regardless of source |
+| **Tested by** | None — not exercisable via /chat. Adjacent coverage: SC-03 tests §3.3 (the downstream effect of poisoned corpus content) |
+
+---
+
+## 8. Risk Matrix
 
 Every documented sub-vector below has a row. Rows are sorted by `Impact × Likelihood`, with confirmed open findings at the top. Each row's `§ref` links back to its subsection above.
 
@@ -425,14 +467,17 @@ Every documented sub-vector below has a row. Rows are sorted by `Impact × Likel
 | 24 | Recursive tool calls | §4.3 | Low | Low | Wall-clock deadline |
 | 25 | Unintended tool invocation | §4.1 | Low | Medium | Worker preconditions |
 | 26 | Infinite loops | §5.3 | Medium | Low | Wall-clock deadline |
+| 27 | Model provider compromise | §7.2 | Critical | Very Low | TLS; unknown beyond that |
+| 28 | Retrieval source compromise | §7.3 | High | Low | Citations (provenance unverified) |
+| 29 | Dependency compromise | §7.1 | Critical | Very Low | Unknown — pipeline-dependent |
 
 ---
 
-## 8. Platform Coverage Plan — current state
+## 9. Platform Coverage Plan — current state
 
 This section describes where the platform actually is, not where it was going at first draft. Updated as findings land.
 
-**Phase 1 (MVP) — DONE.** 44 seed cases across all 6 categories, covering **26 of 26 threat-model sub-vectors** (40 initial cases + 4 high-tier additions on 2026-05-13: DE-11, TM-05, IR-10, SC-05 — all defended on the live target). Two-tier Judge running live (Triage Haiku 4.5 + Judge Sonnet 4.5). LangSmith tracing on every campaign. Dashboard deployed at [heilashahidi-adversarial-openemr.hf.space](https://heilashahidi-adversarial-openemr.hf.space/).
+**Phase 1 (MVP) — DONE.** 44 seed cases across the 6 exercisable categories, covering **26 of 26 exercisable sub-vectors** (40 initial cases + 4 high-tier additions on 2026-05-13: DE-11, TM-05, IR-10, SC-05 — all defended on the live target). §7 supply-chain (3 sub-vectors) is documented but not exercisable via the HTTP /chat surface, so the suite covers **26 of 29 documented sub-vectors at 100%** and the remaining 3 are an honest gap rather than a missing test. Two-tier Judge + Tier-0 deterministic gates running live. LangSmith tracing on every campaign. Dashboard deployed at [heilashahidi-adversarial-openemr.hf.space](https://heilashahidi-adversarial-openemr.hf.space/).
 
 **Phase 1 results (40-case live run, 2026-05-12):**
 
@@ -453,4 +498,4 @@ The Orchestrator and Documentation Agent are also designed but not implemented. 
 
 **Phase 3 — NOT STARTED.** Regression harness designed (`ARCHITECTURE.md` §4.3) but not yet implemented. When built, it will replay every promoted bypass (currently DE-09 only) deterministically on every target deploy — no LLM in the replay path. Behavioral drift will be flagged as `inconclusive`, not as remediation.
 
-**Coverage tracking:** `state_store.coverage` partitions on `(category, subcategory)` so the Orchestrator can score at the 26-sub-vector granularity once it ships. The dashboard's Coverage Map visualizes this live; right now every cell has at least one exercised seed case.
+**Coverage tracking:** `state_store.coverage` partitions on `(category, subcategory)` so the Orchestrator can score at the 29-sub-vector granularity once it ships. The dashboard's Coverage Map visualizes this live; every exercisable cell has at least one seed case, and the 3 §7 supply-chain cells render with 0 attacks (the honest gap).

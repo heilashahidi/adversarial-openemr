@@ -137,8 +137,8 @@ def score_subvector(cat, sub, coverage, partials, costs, recency_hrs, regression
     total_attacks = coverage.get((cat, sub), {}).get("total_attacks", 0)
     gap_factor = 1.0 / (1 + total_attacks)
 
-    rank = THREAT_MODEL_PRIORITY.get((cat, sub), 26)
-    threat_priority = max(0.0, min(1.0, (27 - rank) / 26))
+    rank = THREAT_MODEL_PRIORITY.get((cat, sub), 29)
+    threat_priority = max(0.0, min(1.0, (30 - rank) / 29))
 
     partial_count = partials.get((cat, sub), 0)
     partial_factor = partial_count / (total_attacks + 1)
