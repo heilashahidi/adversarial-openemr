@@ -287,7 +287,7 @@ st.markdown(
   /* Tier-cost strip */
   .tier-strip {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     gap: 12px;
     margin-bottom: 8px;
   }
@@ -375,6 +375,7 @@ if page == "Overview":
     total_cost  = triage_cost + judge_cost
     triage_n    = sum(1 for r in rs if r.get("judged_by") == "triage")
     judge_n     = sum(1 for r in rs if r.get("judged_by") == "judge")
+    det_n       = sum(1 for r in rs if (r.get("judged_by") or "").startswith("deterministic"))
     total       = results.get("total_attacks", 0)
 
     # ── Hero banner ──
@@ -382,7 +383,7 @@ if page == "Overview":
         f"""
 <div class="hero">
   <div class="hero-title">Adversarial AI Security Platform</div>
-  <div class="hero-subtitle">Multi-agent evaluation of the Clinical Co-Pilot — 26 threat-model sub-vectors, two-tier Judge, live target</div>
+  <div class="hero-subtitle">Multi-agent evaluation of the Clinical Co-Pilot — 26 threat-model sub-vectors, T0 deterministic gates + two-tier Judge, live target</div>
   <a class="hero-pill" href="{TARGET_URL}" target="_blank">🎯 LIVE TARGET <code>{TARGET_URL.replace("https://", "")}</code></a>
   <div class="hero-meta">
     Last run · <b>{results.get('timestamp', 'unknown')[:19].replace('T', ' ')} UTC</b>
@@ -409,10 +410,14 @@ if page == "Overview":
     )
 
     # ── Tier cost strip ──
-    if triage_n + judge_n > 0:
+    if triage_n + judge_n + det_n > 0:
         st.markdown(
             f"""
 <div class="tier-strip">
+  <div class="tcard">
+    <span class="tlabel">🎯 T0 Deterministic <span style="color:#94a3b8;">· no LLM</span></span>
+    <span class="tvalue">{det_n} · $0.0000</span>
+  </div>
   <div class="tcard">
     <span class="tlabel">🥇 T1 Triage <span style="color:#94a3b8;">· Haiku 4.5</span></span>
     <span class="tvalue">{triage_n} · ${triage_cost:.4f}</span>
@@ -757,7 +762,12 @@ elif page == "Attack Browser":
         confidence = r.get("verdict_confidence", 0.0)
 
         judged_by = r.get("judged_by", "judge")
-        tier_badge = "🥇 T1" if judged_by == "triage" else "🥈 T2"
+        if judged_by == "triage":
+            tier_badge = "🥇 T1"
+        elif (judged_by or "").startswith("deterministic"):
+            tier_badge = "🎯 T0"
+        else:
+            tier_badge = "🥈 T2"
         header = (
             f"{emoji} **[{r.get('attack_id')}]** "
             f"`{r.get('category')}/{r.get('subcategory')}` — "
@@ -778,7 +788,9 @@ elif page == "Attack Browser":
                 st.markdown(f"**Judge confidence:** {confidence:.2f}")
                 t_cost = r.get("triage_cost", 0.0)
                 j_cost = r.get("judge_cost", 0.0)
-                if t_cost and j_cost:
+                if (judged_by or "").startswith("deterministic"):
+                    st.markdown(f"**Cost:** T0 $0.00000 (deterministic gate — no LLM)")
+                elif t_cost and j_cost:
                     st.markdown(f"**Cost:** T1 ${t_cost:.5f} + T2 ${j_cost:.5f}")
                 elif t_cost:
                     st.markdown(f"**Cost:** T1 ${t_cost:.5f} (short-circuited)")
@@ -1236,6 +1248,7 @@ elif page == "Agent Activity":
                 ts = r.get("timestamp", "")
                 t_cost = r.get("triage_cost") or 0
                 j_cost = r.get("judge_cost") or 0
+                judged_by = r.get("judged_by") or ""
                 if t_cost:
                     synth.append({
                         "agent": "triage",
@@ -1253,6 +1266,19 @@ elif page == "Agent Activity":
                         "input_tokens": None,
                         "output_tokens": None,
                         "cost_usd": j_cost,
+                        "campaign_id": campaign,
+                        "created_at": ts,
+                    })
+                # Deterministic gates emit a verdict but spend $0 — record them
+                # so the activity page reflects the work the gate did instead
+                # of silently dropping the row (e.g., every DOS-01 lands here).
+                if judged_by.startswith("deterministic"):
+                    synth.append({
+                        "agent": judged_by,
+                        "model": "(deterministic, no LLM)",
+                        "input_tokens": None,
+                        "output_tokens": None,
+                        "cost_usd": 0.0,
                         "campaign_id": campaign,
                         "created_at": ts,
                     })
