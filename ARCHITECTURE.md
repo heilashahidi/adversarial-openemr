@@ -2,14 +2,14 @@
 
 > **Target system:** Clinical Co-Pilot (Weeks 1–2), deployed at `https://openemr.146-190-75-148.sslip.io/`
 > **Companion documents:**
-> - [`THREAT_MODEL.md`](./THREAT_MODEL.md) — attack surface map, 29 documented sub-vectors (26 exercisable + 3 supply-chain doc-only), 2 confirmed empirical findings
+> - [`THREAT_MODEL.md`](./THREAT_MODEL.md) — attack surface map, 29 sub-vectors (26 exercisable + 3 supply-chain probe seeds), 2 confirmed empirical findings
 > - [`USERS.md`](./USERS.md) — platform users (Operator, Grader/Reviewer, Target Maintainer, Security Researcher, the agents themselves) and how their workflows drive specific architectural decisions. Every component below traces to at least one user it serves.
 
 ---
 
 ## Executive Summary
 
-This document describes a multi-agent adversarial evaluation platform designed to continuously discover, evaluate, and defend against attacks on the Clinical Co-Pilot — an AI assistant connected to patient data inside OpenEMR. It takes two structured inputs: [`THREAT_MODEL.md`](./THREAT_MODEL.md) (what the platform attacks — 29 documented sub-vectors, 26 of them exercisable via HTTP /chat, plus 2 confirmed empirical findings) and [`USERS.md`](./USERS.md) (who the platform serves — 4 human user classes plus the agents themselves; every component below traces back to at least one user it serves). **All five agents are now implemented and runnable** — Orchestrator scores targets, Red Team mutates seeds, Triage filters at Tier-1, Judge evaluates at Tier-2, Documentation writes vuln reports, and the Regression Harness deterministically replays confirmed exploits. Every decision below is one a reviewer can challenge and one we can defend.
+This document describes a multi-agent adversarial evaluation platform designed to continuously discover, evaluate, and defend against attacks on the Clinical Co-Pilot — an AI assistant connected to patient data inside OpenEMR. It takes two structured inputs: [`THREAT_MODEL.md`](./THREAT_MODEL.md) (what the platform attacks — 29 sub-vectors: 26 exercisable behavioral seeds + 3 supply-chain probe seeds, plus 2 confirmed empirical findings) and [`USERS.md`](./USERS.md) (who the platform serves — 4 human user classes plus the agents themselves; every component below traces back to at least one user it serves). **All five agents are now implemented and runnable** — Orchestrator scores targets, Red Team mutates seeds, Triage filters at Tier-1, Judge evaluates at Tier-2, Documentation writes vuln reports, and the Regression Harness deterministically replays confirmed exploits. Every decision below is one a reviewer can challenge and one we can defend.
 
 The platform is built around **five distinct agent roles**: an **Orchestrator** that reads system coverage and prioritizes what to attack next; a **Red Team Agent** that generates, mutates, and escalates adversarial inputs; a **Triage Agent (Tier 1)** — a cheap Haiku filter that catches obvious clean defenses and is structurally prohibited from declaring a bypass; a **Judge Agent (Tier 2)** — Sonnet — that independently evaluates everything Triage escalates; and a **Documentation Agent** that converts confirmed exploits into structured, professional vulnerability reports.
 
@@ -27,7 +27,7 @@ The **observability layer** has two audiences: the Orchestrator reads coverage a
 
 **Human approval gates** exist at three boundaries: before the Documentation Agent files a critical-severity report, before any state-modifying attack, and before launching a novel attack sub-category for the first time. Within those gates the platform is autonomous; outside them, it stops and asks.
 
-The Stage 3 baseline has matured: the seed suite now covers all 26 exercisable threat-model sub-vectors with 44 cases (40 originals + 4 high-tier additions on 2026-05-13: DE-11 inferential PHI, TM-05 SQL-wildcard patient_id, IR-10 training-mode framing, SC-05 fabricated-handoffs JSON injection — all four defended), and the platform has produced one confirmed bypass (DE-09, §2.4 — `/chat` is unauthenticated, verified 2026-05-11) plus one persistent target failure (PI-04 base64 → HTTP 500). The Red Team Agent's job from here is to mutate the 38 clean-defense baselines into the harder variants the threat model enumerates — encoding bypasses, retrieval-output injection, multi-turn escalation — which the seed suite begins but does not yet pressure-test.
+The Stage 3 baseline has matured: the seed suite now covers all 29 threat-model sub-vectors with 47 cases (40 originals + 4 high-tier additions on 2026-05-13: DE-11 inferential PHI, TM-05 SQL-wildcard patient_id, IR-10 training-mode framing, SC-05 fabricated-handoffs JSON injection — all four defended), and the platform has produced one confirmed bypass (DE-09, §2.4 — `/chat` is unauthenticated, verified 2026-05-11) plus one persistent target failure (PI-04 base64 → HTTP 500). The Red Team Agent's job from here is to mutate the 38 clean-defense baselines into the harder variants the threat model enumerates — encoding bypasses, retrieval-output injection, multi-turn escalation — which the seed suite begins but does not yet pressure-test.
 
 ---
 
@@ -193,7 +193,7 @@ Agents do not call each other directly. Every handoff is a row in the SQLite sta
 
 ## 2. Attack Categories
 
-The platform exercises 6 of the 7 categories from `THREAT_MODEL.md` (26 exercisable sub-vectors; 3 additional supply-chain sub-vectors in §2.7 are doc-only because the platform's HTTP `/chat` attack surface can't reach them). The threat model is the authoritative list; this section is a pointer, not a copy.
+The platform exercises all 7 categories from `THREAT_MODEL.md` (29 sub-vectors). The 26 behavioral sub-vectors get full /chat exercises; the 3 supply-chain sub-vectors in §2.7 are probed by indirect "downstream signal" seeds — the real upstream attack happens at build/deploy time and is outside the HTTP /chat surface (see THREAT_MODEL.md §7 preamble). The threat model is the authoritative list; this section is a pointer, not a copy.
 
 | § | Category | Sub-vectors |
 |---|---|---|
@@ -203,7 +203,7 @@ The platform exercises 6 of the 7 categories from `THREAT_MODEL.md` (26 exercisa
 | 2.4 | Tool Misuse | unintended invocation, parameter tampering, recursive calls, insecure output handling |
 | 2.5 | Denial of Service | token exhaustion, cost amplification, infinite loops |
 | 2.6 | Identity & Role | privilege escalation, persona hijacking, trust boundary, hypothetical framing |
-| 2.7 | Supply Chain *(doc-only)* | dependency compromise, model provider compromise, retrieval source compromise |
+| 2.7 | Supply Chain *(probe seeds only)* | dependency compromise (SUP-01), model provider compromise (SUP-02), retrieval source compromise (SUP-03) |
 
 The sub-categories defined in `config.ATTACK_SUBCATEGORIES` are the keys the `coverage` table is partitioned by — there is one row per `(category, subcategory)` pair, so the Orchestrator can steer at this granularity.
 
@@ -524,7 +524,7 @@ The human side of the observability layer is surfaced through a deployed Streaml
 
 **Live URL:** [https://heilashahidi-adversarial-openemr.hf.space/](https://heilashahidi-adversarial-openemr.hf.space/)
 
-The dashboard is a read-only viewer of committed run artifacts (`evals/results/latest_results.json`, `THREAT_MODEL.md`, `ARCHITECTURE.md`, `config.ATTACK_SUBCATEGORIES`). It performs no live target calls and needs no secrets. Five pages: Overview (verdict mix, by-category breakdown, target failures), Coverage Map (heatmap of all 29 threat-model sub-vectors — exercisable + supply-chain doc-only), Attack Browser (every case with prompt, target response, judge verdict + reasoning), Threat Model, and Architecture. To update what viewers see: rerun the attack suite locally and `git push` — Spaces auto-rebuilds.
+The dashboard is a read-only viewer of committed run artifacts (`evals/results/latest_results.json`, `THREAT_MODEL.md`, `ARCHITECTURE.md`, `config.ATTACK_SUBCATEGORIES`). It performs no live target calls and needs no secrets. Five pages: Overview (verdict mix, by-category breakdown, target failures), Coverage Map (heatmap of all 29 threat-model sub-vectors), Attack Browser (every case with prompt, target response, judge verdict + reasoning), Threat Model, and Architecture. To update what viewers see: rerun the attack suite locally and `git push` — Spaces auto-rebuilds.
 
 This keeps the operator and the grader looking at exactly the same artifacts that the Orchestrator uses internally; there is no separate reporting database that could drift from the state store.
 
@@ -574,9 +574,9 @@ Inside these gates the platform is autonomous. Outside them, it stops and waits.
 
 This architecture is grounded in what the platform has actually observed, not just paper analysis. Updated as the empirical record grows.
 
-**Current state (most recent full-suite live run: 40 cases on 2026-05-13_183005, workers=2; suite expanded to 44 cases on 2026-05-13 with 4 high-tier additions run individually — DE-11, TM-05, IR-10, SC-05, all defended):**
+**Current state (most recent full-suite live run: 40 cases on 2026-05-13_183005, workers=2; suite expanded to 44 cases on 2026-05-13 with 4 high-tier additions run individually — DE-11, TM-05, IR-10, SC-05, all defended; further expanded to 47 cases on 2026-05-14 with 3 supply-chain probe seeds added — SUP-01, SUP-02, SUP-03, see THREAT_MODEL.md §7 for the probe-vs-exercise caveat):**
 
-- 44 seed cases across the 6 exercisable threat-model categories, covering **26 of 26 exercisable sub-vectors** at 100% (the 3 supply-chain sub-vectors in §7 are doc-only — not reachable via /chat).
+- 47 seed cases across all 7 threat-model categories, covering **29 of 29 sub-vectors at 100%** (26 behavioral seeds + 3 supply-chain probe seeds; see THREAT_MODEL.md §7 preamble for the probe-vs-exercise caveat).
 - **1 confirmed bypass:** DE-09, the §2.4 unauthenticated-endpoint probe. Verdict `bypass` at 1.0 confidence, re-confirmed every campaign since 2026-05-11.
 - **38 defended** at confidence ≥ 0.92 — the target's behavioral defenses (system prompt, refusal training, evidence separation) generalize across the full threat surface, not just the categories tested in early Stage 3.
 - **1 target error:** PI-04, the §1.5 base64-encoded payload. The target returns HTTP 500 — a real input-validation gap, not a defense. The platform's target-failure short-circuit prevents this from masquerading as a clean refusal.

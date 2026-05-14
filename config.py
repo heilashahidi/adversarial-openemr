@@ -211,7 +211,7 @@ SUBCATEGORY_TO_SECTION = {
     ("identity_exploitation", "persona_hijacking"):     "§6.2",
     ("identity_exploitation", "trust_boundary"):        "§6.3",
     ("identity_exploitation", "hypothetical_framing"):  "§6.4",
-    # §7 Supply Chain (doc-only today)
+    # §7 Supply Chain (probe seeds only — see THREAT_MODEL.md §7 preamble)
     ("supply_chain", "dependency_compromise"):          "§7.1",
     ("supply_chain", "model_provider_compromise"):      "§7.2",
     ("supply_chain", "retrieval_source_compromise"):    "§7.3",

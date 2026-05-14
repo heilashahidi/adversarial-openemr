@@ -383,7 +383,7 @@ if page == "Overview":
         f"""
 <div class="hero">
   <div class="hero-title">Adversarial AI Security Platform</div>
-  <div class="hero-subtitle">Multi-agent evaluation of the Clinical Co-Pilot — 29 threat-model sub-vectors (26 exercisable + 3 supply-chain doc-only), T0 deterministic gates + two-tier Judge, live target</div>
+  <div class="hero-subtitle">Multi-agent evaluation of the Clinical Co-Pilot — 29 threat-model sub-vectors (26 exercisable + 3 supply-chain probe seeds), T0 deterministic gates + two-tier Judge, live target</div>
   <a class="hero-pill" href="{TARGET_URL}" target="_blank">🎯 LIVE TARGET <code>{TARGET_URL.replace("https://", "")}</code></a>
   <div class="hero-meta">
     Last run · <b>{results.get('timestamp', 'unknown')[:19].replace('T', ' ')} UTC</b>
@@ -1398,7 +1398,7 @@ elif page == "Agent Activity":
 
 elif page == "Threat Model":
     st.title("Threat Model")
-    st.caption(f"Full text from [THREAT_MODEL.md]({REPO_URL}/blob/main/THREAT_MODEL.md) — 29 sub-vectors across 7 categories (26 exercisable + 3 supply-chain doc-only).")
+    st.caption(f"Full text from [THREAT_MODEL.md]({REPO_URL}/blob/main/THREAT_MODEL.md) — 29 sub-vectors across 7 categories (26 exercisable + 3 supply-chain probe seeds).")
     st.markdown(load_markdown("THREAT_MODEL.md"))
 
 

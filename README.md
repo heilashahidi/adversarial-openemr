@@ -90,8 +90,8 @@ Four-stage W3 deliverable:
 | Stage | Artifact | Status |
 |---|---|---|
 | 1 — Stand up the target | Live URL above, this section | ✅ |
-| 2 — Threat Model | [`THREAT_MODEL.md`](./THREAT_MODEL.md) — 29 sub-vectors across 7 categories (26 exercisable + 3 supply-chain doc-only), OWASP LLM mapping, risk matrix | ✅ |
-| 3 — Seed Attack Suite + Agent Prototype | [`evals/seed_attacks.py`](./evals/seed_attacks.py) (44 cases, 100% sub-vector coverage), Triage + Judge running live | ✅ |
+| 2 — Threat Model | [`THREAT_MODEL.md`](./THREAT_MODEL.md) — 29 sub-vectors across 7 categories (26 exercisable + 3 supply-chain probe seeds), OWASP LLM mapping, risk matrix | ✅ |
+| 3 — Seed Attack Suite + Agent Prototype | [`evals/seed_attacks.py`](./evals/seed_attacks.py) (47 cases, 100% sub-vector coverage), Triage + Judge running live | ✅ |
 | 4 — Platform Architecture | [`ARCHITECTURE.md`](./ARCHITECTURE.md) — 5-agent design, message schemas, scoring formula, regression pipeline | ✅ |
 
 ### All five agents implemented
@@ -111,7 +111,7 @@ Plus the **Regression Harness** ([`agents/regression_harness.py`](./agents/regre
 The hosted dashboard is a read-only viewer of committed run artifacts:
 
 - **Overview** — headline stats from the latest attack run (bypasses / defended / partial / errors, T1 vs T2 cost split)
-- **Coverage Map** — heatmap showing all 29 threat-model sub-vectors (26 exercisable + 3 supply-chain doc-only) and their tested-vs-untested status
+- **Coverage Map** — heatmap showing all 29 threat-model sub-vectors (26 exercisable + 3 supply-chain probe seeds) and their tested-vs-untested status
 - **Attack Browser** — every adversarial case with prompt, target response, and judge verdict + reasoning
 - **Threat Model** — full attack-surface map
 - **Architecture** — multi-agent platform design
