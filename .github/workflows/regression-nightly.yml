@@ -1,0 +1,66 @@
+name: Nightly Regression Replay
+
+# Replays every confirmed exploit against the live target on a schedule and
+# commits the resulting JSON back to main so the dashboard reflects fresh
+# pass/fail/inconclusive verdicts every day. Closes the "no continuous-
+# execution scheduler" gap (req #6 in the audit).
+
+on:
+  schedule:
+    - cron: '0 7 * * *'   # 07:00 UTC daily ≈ midnight PT
+  workflow_dispatch: {}    # also runnable on-demand from the Actions tab
+
+permissions:
+  contents: write
+
+concurrency:
+  group: regression-nightly
+  cancel-in-progress: false
+
+jobs:
+  regress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install --no-cache-dir -r requirements.txt
+
+      - name: Backfill state.db from canonical result JSONs
+        # state.db is gitignored, so CI starts with an empty store. The
+        # backfill script walks every committed result JSON and rebuilds
+        # the findings + exploits tables (~84 confirmed exploits as of today).
+        run: python3 scripts/backfill_state_from_results.py
+
+      - name: Run regression harness
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          TS=$(date -u +%Y%m%d_%H%M%S)
+          python3 agents/regression_harness.py \
+            --save evals/results/regression_nightly_${TS}.json
+
+      - name: Commit and push regression artifact
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name  "regression-bot"
+          git config user.email "actions@github.com"
+          git add evals/results/regression_nightly_*.json || true
+          if git diff --cached --quiet; then
+            echo "No new regression artifact to commit."
+            exit 0
+          fi
+          git commit -m "Nightly regression replay $(date -u +%Y-%m-%d) [skip ci]"
+          git push

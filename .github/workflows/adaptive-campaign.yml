@@ -1,0 +1,81 @@
+name: Adaptive Campaign
+
+# Runs one Orchestrator → Red Team → Triage → Judge campaign every 6 hours
+# against the live target. The Orchestrator picks the next sub-vector by
+# coverage gap + threat-model rank + cost penalty + recency penalty
+# (agents/orchestrator_agent.py §3.1). Each run targets at most 5 attacks
+# under a $0.50 budget cap. Closes the "no continuous-execution scheduler"
+# gap (req #1, #2 in the audit) — the platform now hunts continuously
+# rather than only when manually invoked.
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'  # every 6 hours
+  workflow_dispatch:
+    inputs:
+      attacks:
+        description: 'Attacks per campaign'
+        required: false
+        default: '5'
+      budget:
+        description: 'Cost budget in USD'
+        required: false
+        default: '0.50'
+
+permissions:
+  contents: write
+
+concurrency:
+  # Serialize campaign runs — two parallel campaigns would race on state.db
+  # and on the auto-commit step at the end.
+  group: adaptive-campaign
+  cancel-in-progress: false
+
+jobs:
+  campaign:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install --no-cache-dir -r requirements.txt
+
+      - name: Backfill state.db
+        # Gives the Orchestrator real coverage history to score against; without
+        # this every CI run picks "lowest-rank gap" since gap_factor = 1.0 for
+        # every sub-vector. With it, the scoring is meaningful run-over-run.
+        run: python3 scripts/backfill_state_from_results.py
+
+      - name: Run adaptive campaign
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          python3 evals/run_campaign.py \
+            --attacks ${{ github.event.inputs.attacks || '5' }} \
+            --skip-regression \
+            --budget ${{ github.event.inputs.budget || '0.50' }}
+
+      - name: Commit and push campaign artifact
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name  "campaign-bot"
+          git config user.email "actions@github.com"
+          git add evals/results/campaign_*.json || true
+          if git diff --cached --quiet; then
+            echo "No new campaign artifact to commit."
+            exit 0
+          fi
+          git commit -m "Adaptive campaign $(date -u +%Y-%m-%dT%H:%M) [skip ci]"
+          git push
