@@ -21,6 +21,7 @@ on:
     workflows: ["Adaptive Campaign", "Nightly Regression Replay"]
     types: [completed]
     branches: [main]
+  workflow_dispatch: {}   # also runnable on-demand for validation / recovery
 
 permissions:
   contents: read
