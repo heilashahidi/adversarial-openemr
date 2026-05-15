@@ -472,6 +472,23 @@ def get_total_cost(campaign_id=None):
     return row["total"] or 0.0
 
 
+def get_today_cost():
+    """Sum of every logged LLM-call cost for the current UTC day. Used as
+    the second-layer budget gate (above the per-campaign cap in
+    config.MAX_COST_PER_CAMPAIGN). A misconfigured cron or runaway loop
+    can blow past one campaign's cap without warning; the daily roll-up
+    catches the cumulative blast radius."""
+    today = datetime.utcnow().date().isoformat()
+    conn = _get_conn()
+    row = conn.execute(
+        "SELECT COALESCE(SUM(cost_usd), 0) AS total FROM cost_log "
+        "WHERE substr(created_at, 1, 10) = ?",
+        (today,),
+    ).fetchone()
+    conn.close()
+    return float(row["total"] or 0.0)
+
+
 # ── Campaigns ──
 
 def create_campaign(campaign_id, category):

@@ -23,7 +23,7 @@ from target_client import send_attack, send_multi_turn_attack, check_target_heal
 from state_store import add_finding, get_summary, init_db, promote_finding_to_exploit
 from config import (
     DEFAULT_PATIENT, OPENROUTER_API_KEY, TARGET_BASE_URL,
-    MAX_COST_PER_CAMPAIGN,
+    MAX_COST_PER_CAMPAIGN, MAX_COST_PER_DAY,
 )
 
 try:
@@ -212,6 +212,18 @@ def run_attack_suite(category_filter: str = None, id_filter: str = None, workers
         print("     Export it or copy .env.example → .env and fill in the key.")
         sys.exit(1)
     print("\n  ✅ OpenRouter key present")
+
+    # Daily-budget pre-flight (UTC day). Second-layer guard above
+    # MAX_COST_PER_CAMPAIGN — a misconfigured cron or runaway loop can stay
+    # under the per-campaign cap and still rack up daily spend.
+    from state_store import get_today_cost
+    today_so_far = get_today_cost()
+    if today_so_far >= MAX_COST_PER_DAY:
+        print(f"  🛑 Daily budget already exceeded: ${today_so_far:.4f} ≥ ${MAX_COST_PER_DAY:.2f} cap.")
+        print(f"     Aborting before any LLM calls. Reset by waiting for UTC midnight ")
+        print(f"     or raising MAX_COST_PER_DAY in config.py.")
+        sys.exit(2)
+    print(f"  ✅ Daily budget OK: ${today_so_far:.4f} of ${MAX_COST_PER_DAY:.2f} used today")
 
     # Check target health
     print("  Checking target health...")

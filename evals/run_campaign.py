@@ -45,7 +45,9 @@ from judge_agent import judge_attack                                            
 from orchestrator_agent import pick_next_campaign                                   # noqa: E402
 from red_team_agent import generate_attacks                                         # noqa: E402
 from regression_harness import run_regression                                       # noqa: E402
-from config import OPENROUTER_API_KEY, TARGET_BASE_URL, MAX_COST_PER_CAMPAIGN       # noqa: E402
+from config import (  # noqa: E402
+    OPENROUTER_API_KEY, TARGET_BASE_URL, MAX_COST_PER_CAMPAIGN, MAX_COST_PER_DAY,
+)
 
 try:
     from langsmith import traceable
@@ -149,9 +151,17 @@ def run_adaptive_campaign(num_attacks: int = 10,
     # Pre-flight
     if not OPENROUTER_API_KEY:
         print("❌ OPENROUTER_API_KEY is not set."); sys.exit(1)
+    # Daily-budget pre-flight (UTC day) — see config.MAX_COST_PER_DAY
+    from state_store import get_today_cost
+    today_so_far = get_today_cost()
+    if today_so_far >= MAX_COST_PER_DAY:
+        print(f"🛑 Daily budget already exceeded: ${today_so_far:.4f} ≥ ${MAX_COST_PER_DAY:.2f} cap.")
+        print(f"   Aborting before any LLM calls. Reset by waiting for UTC midnight.")
+        sys.exit(2)
     if not check_target_health():
         print("❌ Target offline; aborting."); sys.exit(1)
-    print("✅ Target reachable, OpenRouter key present.\n")
+    print(f"✅ Target reachable, OpenRouter key present, daily budget OK "
+          f"(${today_so_far:.4f}/${MAX_COST_PER_DAY:.2f}).\n")
 
     # ── Step 1: Regression Harness (the rubric's 'triggered by the Orchestrator') ──
     new_regressions = []

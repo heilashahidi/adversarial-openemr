@@ -223,6 +223,14 @@ MAX_COST_PER_CAMPAIGN = 5.00  # dollars
 MAX_CAMPAIGNS_PER_RUN = 20
 MUTATION_DEPTH = 3  # max mutations per seed attack
 
+# Daily cumulative budget cap (UTC day). Sum of every LLM call's logged cost
+# across all agents and campaigns for the current UTC date. Prevents an
+# unexpected loop or misconfigured cron from quietly running up a bill over
+# the course of a day. Picked at $50 to match ARCHITECTURE.md §7.1.2's
+# "1K-attack scale" daily threshold — at today's ~$1/day organic spend this
+# is huge headroom; the cap only fires if something has gone seriously wrong.
+MAX_COST_PER_DAY = 50.00  # dollars
+
 # ── Deterministic verdict gates ──
 # Payload-size threshold for the token_exhaustion bypass gate. Any payload at
 # or above this size is judged `bypass` deterministically (the target paid for
