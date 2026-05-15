@@ -30,7 +30,21 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from target_client import send_attack, send_multi_turn_attack, check_target_health  # noqa: E402
+from target_client import (  # noqa: E402
+    send_attack, send_multi_turn_attack, send_extract_attack, check_target_health,
+)
+
+# Seed lookup for surface-aware replay (see _replay_one_attack docstring).
+# Surface info isn't stored on the ExploitArtifact today (Option A fix); this
+# import gives the harness enough context for any exploit whose attack_id
+# matches a known seed.
+try:
+    sys.path.insert(0, str(Path(__file__).parent.parent / "evals"))
+    from seed_attacks import SEED_ATTACKS  # noqa: E402
+    _SEED_BY_ID = {s["id"]: s for s in SEED_ATTACKS}
+except ImportError:
+    _SEED_BY_ID = {}
+
 from state_store import (  # noqa: E402
     _get_conn,
     insert_regression_run,
@@ -160,8 +174,47 @@ def _classify_response(exploit: dict, response_text: str, status_code: int) -> t
 
 # ── Replay logic ──────────────────────────────────────────────────────────
 
-def _replay_one_attack(attack_payload, multi_turn: bool = False) -> tuple[str, int]:
-    """Send an attack to the live target. Returns (response_text, status_code)."""
+def _replay_one_attack(exploit_or_payload, multi_turn: bool = False) -> tuple:
+    """
+    Send an attack to the live target. Returns (response_text, status_code).
+
+    Surface-aware (Option A fix, 2026-05-15): if the caller passes a full
+    exploit dict and that exploit's attack_id maps to a SEED_ATTACKS entry
+    with `attack_via_extract=True`, replay via send_extract_attack against
+    the /extract endpoint. Otherwise fall through to the historical /chat
+    path. Backwards-compatible — callers that pass a string/list payload
+    (e.g. older code paths) still work and route to /chat.
+
+    Limitation: only covers exploits whose attack_id is in SEED_ATTACKS.
+    Future Red Team mutations of upload seeds (e.g. RT-ENC-SC-06-bas) will
+    fall through to /chat and be misclassified — fixing that requires
+    persisting attack_surface on the ExploitArtifact (Option B in the
+    9b751a8 commit message).
+    """
+    # Surface-aware branch — only fires when we get the full exploit dict.
+    if isinstance(exploit_or_payload, dict):
+        aid = exploit_or_payload.get("attack_id")
+        seed = _SEED_BY_ID.get(aid)
+        if seed and seed.get("attack_via_extract"):
+            ext = seed.get("extract_payload", {})
+            content = ext.get("content", "")
+            if isinstance(content, str):
+                content = content.encode("utf-8")
+            result = send_extract_attack(
+                file_bytes=content,
+                filename=ext.get("filename", "doc.bin"),
+                doc_type=ext.get("doc_type", "pdf"),
+                mime_type=ext.get("mime_type"),
+            )
+            return (result.get("response", result.get("error", "")),
+                    result.get("status_code", 0))
+        # Not an upload seed — extract the legacy payload and continue
+        attack_payload = exploit_or_payload.get("attack_sequence")
+        if isinstance(attack_payload, list) and len(attack_payload) > 1:
+            multi_turn = True
+    else:
+        attack_payload = exploit_or_payload
+
     if multi_turn and isinstance(attack_payload, list):
         results = send_multi_turn_attack(attack_payload)
         combined = "\n---\n".join(
@@ -171,9 +224,9 @@ def _replay_one_attack(attack_payload, multi_turn: bool = False) -> tuple[str, i
         return combined, results[-1].get("status_code", 0) if results else 0
 
     if isinstance(attack_payload, list):
-        attack_payload = "\n".join(attack_payload)
+        attack_payload = "\n".join(attack_payload) if attack_payload else ""
 
-    result = send_attack(attack_payload)
+    result = send_attack(attack_payload or "")
     return result.get("response", result.get("error", "")), result.get("status_code", 0)
 
 
@@ -247,13 +300,11 @@ def run_regression() -> dict:
 
     for ex in exploits:
         atk_id = ex.get("attack_id", "?")
+        # Pass the full exploit dict so _replay_one_attack can branch on
+        # attack_surface for upload-path seeds (SC-06/07/08). For everything
+        # else the function still walks the stored attack_sequence.
+        response_text, status = _replay_one_attack(ex)
         seq = ex.get("attack_sequence", [])
-        if isinstance(seq, list) and len(seq) > 1:
-            response_text, status = _replay_one_attack(seq, multi_turn=True)
-        elif isinstance(seq, list) and len(seq) == 1:
-            response_text, status = _replay_one_attack(seq[0], multi_turn=False)
-        else:
-            response_text, status = _replay_one_attack(seq, multi_turn=False)
 
         verdict, reasoning = _classify_response(ex, response_text or "", status)
         previous_verdict = get_last_regression_verdict(ex["id"])
