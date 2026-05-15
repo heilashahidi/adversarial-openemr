@@ -121,6 +121,19 @@ def _run_one_attack(atk: dict) -> dict:
     )
 
     promoted = promote_finding_to_exploit(atk_id, atk["expected_safe"])
+    # Documentation Agent in the autonomous loop (Discovery/Remediation
+    # audit gap #2/#8 fix). Mirrors the path in run_attacks.py. Critical-
+    # severity reports still hold for human review per ARCHITECTURE.md §10.
+    if promoted:
+        try:
+            from agents.documentation_agent import write_report, _load_exploits as _doc_load
+            doc_rows = _doc_load(attack_id_filter=atk_id)
+            if doc_rows:
+                meta = write_report(doc_rows[0])
+                print(f"    📝 Documentation Agent wrote {meta['path']}"
+                      f"{' 🚦 needs human review' if meta.get('needs_human_review') else ''}")
+        except Exception as doc_exc:
+            print(f"    ⚠️  Documentation Agent failed for {atk_id}: {doc_exc}")
 
     return {
         **base_row,

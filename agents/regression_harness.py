@@ -287,7 +287,13 @@ def _build_variant_exploit(exploit: dict, scheme: str) -> dict:
 
 def _load_exploits() -> list[dict]:
     conn = _get_conn()
-    rows = conn.execute("SELECT * FROM exploits ORDER BY id").fetchall()
+    # Skip withdrawn exploits (documentation_agent --withdraw marks these).
+    # The vacated rows stay in the table for audit but don't get replayed.
+    rows = conn.execute(
+        "SELECT * FROM exploits "
+        "WHERE COALESCE(withdrawn_at, '') = '' "
+        "ORDER BY id"
+    ).fetchall()
     conn.close()
     out = []
     for r in rows:

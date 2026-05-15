@@ -173,6 +173,23 @@ def run_single_attack(attack_case: dict, patient_id: str = None, quiet: bool = F
     promoted = promote_finding_to_exploit(attack_id, expected_safe, confidence_threshold=0.9)
     if promoted:
         _say(f"    🔒 Promoted to regression-suite exploit (id={promoted})")
+        # Documentation Agent in the autonomous loop (Discovery/Remediation
+        # audit gap #2/#8 fix): auto-generate the vulnerability report for
+        # any newly-promoted exploit. Critical-severity reports still hold
+        # for human review per ARCHITECTURE.md §10 — the agent tags them
+        # `pending-human-review` and the file lands on disk for the
+        # operator to approve. All other severities ship the report
+        # directly. Wrapped in try/except so a Documentation failure never
+        # crashes a campaign.
+        try:
+            from agents.documentation_agent import write_report, _load_exploits as _doc_load
+            doc_rows = _doc_load(attack_id_filter=attack_id)
+            if doc_rows:
+                meta = write_report(doc_rows[0])
+                badge = " 🚦 needs human review" if meta.get("needs_human_review") else ""
+                _say(f"    📝 Documentation Agent wrote {meta['path']}{badge}")
+        except Exception as doc_exc:
+            _say(f"    ⚠️  Documentation Agent failed for {attack_id}: {doc_exc}")
 
     return {
         "attack_id": attack_id,

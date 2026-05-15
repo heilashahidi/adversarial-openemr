@@ -131,6 +131,15 @@ def init_db():
                 (cat, sub)
             )
 
+    # Idempotent column migration for "withdraw a verdict" workflow.
+    # SQLite ALTER TABLE doesn't support IF NOT EXISTS for columns, so we
+    # introspect first. Used by documentation_agent --withdraw.
+    existing_cols = {r[1] for r in conn.execute("PRAGMA table_info(exploits)").fetchall()}
+    if "withdrawn_at" not in existing_cols:
+        conn.execute("ALTER TABLE exploits ADD COLUMN withdrawn_at TEXT DEFAULT ''")
+    if "withdrawn_reason" not in existing_cols:
+        conn.execute("ALTER TABLE exploits ADD COLUMN withdrawn_reason TEXT DEFAULT ''")
+
     conn.commit()
     conn.close()
 
@@ -370,6 +379,35 @@ def promote_target_error_as_exploit(attack_id, expected_safe_text, severity="hig
     conn.commit()
     conn.close()
     return exploit_id
+
+
+def withdraw_exploit(attack_id, reason):
+    """Mark an exploit as withdrawn — the platform's "this was a false positive"
+    affordance. Required by ARCHITECTURE.md §10's trust-boundary contract:
+    if a Critical-severity report slipped through review and was wrong, OR if
+    a routine report was later found to be a Judge miscalibration, the platform
+    must provide a clean way to vacate the verdict without manual file edits.
+
+    Effect on downstream systems:
+      - Regression harness skips withdrawn exploits (_load_exploits filter).
+      - Documentation Agent's report file gets a STATUS: WITHDRAWN header
+        prepended by its --withdraw CLI (caller responsibility).
+      - The exploit row itself stays in state.db for audit trail —
+        withdrawal is non-destructive.
+    """
+    if not reason or not reason.strip():
+        raise ValueError("withdraw_exploit requires a non-empty reason — "
+                         "the audit trail needs to know WHY a verdict was vacated.")
+    conn = _get_conn()
+    cur = conn.execute(
+        "UPDATE exploits SET withdrawn_at=?, withdrawn_reason=? "
+        "WHERE attack_id=? AND withdrawn_at=''",
+        (datetime.utcnow().isoformat(), reason.strip(), attack_id),
+    )
+    conn.commit()
+    n = cur.rowcount
+    conn.close()
+    return n  # 0 if already withdrawn or not found, 1 on success
 
 
 def get_exploits(fixed=None):
