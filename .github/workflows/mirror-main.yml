@@ -1,0 +1,72 @@
+name: Mirror main to HF + GitLab
+
+# Keeps the Hugging Face Space and the labs.gauntletai GitLab mirror in sync
+# with github.com/main. Fires on every commit landing on main — including
+# bot-auto-commits from adaptive-campaign.yml and regression-nightly.yml,
+# which carry `[skip ci]` in their messages and therefore won't trigger the
+# `push` event. The workflow_run trigger picks those up instead.
+#
+# No recursion risk: this workflow pushes only to `hf` and `gitlab` remotes,
+# never back to github.com, so its own pushes can't re-trigger it.
+#
+# Required secrets:
+#   HF_TOKEN      — write token from https://huggingface.co/settings/tokens
+#   GITLAB_TOKEN  — personal access token with `write_repository` scope from
+#                   https://labs.gauntletai.com/-/user_settings/personal_access_tokens
+
+on:
+  push:
+    branches: [main]
+  workflow_run:
+    workflows: ["Adaptive Campaign", "Nightly Regression Replay"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  # Serialize all mirror invocations — overlapping mirrors would race on the
+  # remote refs and one would lose to non-fast-forward errors.
+  group: mirror-main
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    # For workflow_run triggers, skip if the upstream workflow itself failed
+    # — no point mirroring an artifact that never landed. For push triggers,
+    # this condition is true by default.
+    if: >-
+      github.event_name == 'push' ||
+      github.event.workflow_run.conclusion == 'success'
+
+    steps:
+      - name: Checkout (full history)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push to Hugging Face Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          if [ -z "$HF_TOKEN" ]; then
+            echo "::error::HF_TOKEN secret is not set — add it under Settings → Secrets → Actions"
+            exit 1
+          fi
+          git push "https://heilashahidi:${HF_TOKEN}@huggingface.co/spaces/heilashahidi/adversarial-openemr.git" main
+
+      - name: Push to GitLab (labs.gauntletai)
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+        run: |
+          if [ -z "$GITLAB_TOKEN" ]; then
+            echo "::error::GITLAB_TOKEN secret is not set — add it under Settings → Secrets → Actions"
+            exit 1
+          fi
+          git push "https://oauth2:${GITLAB_TOKEN}@labs.gauntletai.com/heilashahidi/adversarial-openemr.git" main
