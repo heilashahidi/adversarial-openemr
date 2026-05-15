@@ -882,10 +882,16 @@ elif page == "Attack Browser":
 elif page == "Exploits":
     st.title("Confirmed Exploits")
     st.caption(
-        "Every confirmed bypass the platform has produced, with current "
+        "Every confirmed exploit the platform has produced, with current "
         "regression status. Reads `state_store.exploits` joined with the "
-        "latest `regression_runs` history. Auto-promoted by the gate in "
-        "`run_attacks.py` when verdict=bypass AND confidence ≥ 0.9."
+        "latest `regression_runs` history. Two promotion paths feed this "
+        "page: **(a)** Judge-verdict promotion when verdict=`bypass` AND "
+        "confidence ≥ 0.9 (`state_store.promote_finding_to_exploit`), and "
+        "**(b)** HTTP-5xx-as-bypass promotion when the target returns a "
+        "5xx on any sub-vector (`state_store.promote_target_error_as_exploit`, "
+        "broadened in commit `91d3222` after the encode-mutation campaign "
+        "showed 80 wrapper-pattern crashes across 21 sub-categories). The "
+        "regression harness replays both sets identically."
     )
 
     import sqlite3
