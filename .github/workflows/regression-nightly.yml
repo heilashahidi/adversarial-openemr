@@ -35,7 +35,11 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install --no-cache-dir -r requirements.txt
+        # No --no-cache-dir — the setup-python cache action above saves the
+        # pip download cache between runs, so subsequent invocations skip
+        # re-downloading wheels. The Post-step failure mode that drops the
+        # cache is mutually exclusive with --no-cache-dir.
+        run: pip install -r requirements.txt
 
       - name: Backfill state.db from canonical result JSONs
         # state.db is gitignored, so CI starts with an empty store. The
@@ -52,6 +56,12 @@ jobs:
             --save evals/results/regression_nightly_${TS}.json
 
       - name: Commit and push regression artifact
+        # Concurrent workflow runs (campaign + regression at the same time)
+        # can race on `main`. The concurrency group serializes WITHIN this
+        # workflow but not across workflows — so we fetch + rebase before
+        # push, with up to 3 retries. The artifact is a new file in
+        # evals/results/ so the rebase is a clean fast-forward; we never
+        # touch shared paths.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -63,4 +73,15 @@ jobs:
             exit 0
           fi
           git commit -m "Nightly regression replay $(date -u +%Y-%m-%d) [skip ci]"
-          git push
+          for attempt in 1 2 3; do
+            if git push 2>&1; then
+              echo "Pushed on attempt $attempt."
+              exit 0
+            fi
+            echo "Push attempt $attempt rejected — rebasing on origin/main and retrying."
+            git fetch origin main
+            git rebase origin/main
+            sleep $((attempt * 5))
+          done
+          echo "Push failed after 3 attempts."
+          exit 1
