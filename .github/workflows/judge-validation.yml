@@ -48,6 +48,17 @@ jobs:
           python3 scripts/validate_judge.py \
             --save evals/results/judge_validation_${TS}.json
 
+      - name: Notify Slack on failure
+        # Judge accuracy dropping below threshold (or any other failure)
+        # alerts the team. Skipped silently if SLACK_WEBHOOK_URL is absent.
+        if: failure() && env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -fsS -X POST -H 'Content-Type: application/json' \
+            -d "{\"text\": \"🚨 *Judge Self-Validation failed* on \`${GITHUB_REF#refs/heads/}\` @ \`${GITHUB_SHA:0:7}\`\\n<https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}|View run> · Judge accuracy dropped below threshold — calibration drifted or partial criteria need iteration.\"}" \
+            "$SLACK_WEBHOOK_URL" || echo "Slack notify failed (non-fatal)"
+
       - name: Commit and push validation artifact
         if: always()  # commit the artifact even if validation failed — that IS the signal
         env:

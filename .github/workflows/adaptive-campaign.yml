@@ -70,6 +70,17 @@ jobs:
             --skip-regression \
             --budget ${{ github.event.inputs.budget || '0.50' }}
 
+      - name: Notify Slack on failure
+        # Cron campaigns running unattended — alert on any step failure.
+        # Skipped silently if SLACK_WEBHOOK_URL is absent.
+        if: failure() && env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -fsS -X POST -H 'Content-Type: application/json' \
+            -d "{\"text\": \"⚠️ *Adaptive Campaign failed* on \`${GITHUB_REF#refs/heads/}\` @ \`${GITHUB_SHA:0:7}\`\\n<https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}|View run> · Cron-fired campaign didn't complete cleanly — check target health or API keys.\"}" \
+            "$SLACK_WEBHOOK_URL" || echo "Slack notify failed (non-fatal)"
+
       - name: Commit and push campaign artifact
         # Concurrent workflow runs (campaign + regression at the same time)
         # can race on `main`. The concurrency group serializes WITHIN this

@@ -378,6 +378,56 @@ if page == "Overview":
     det_n       = sum(1 for r in rs if (r.get("judged_by") or "").startswith("deterministic"))
     total       = results.get("total_attacks", 0)
 
+    # ── Platform health badge — single-glance "is the system OK right now?" ──
+    # Aggregates three independent CI signals into one indicator:
+    #   - latest regression batch's `new_regressions` count (target-side
+    #     regression — a previously-fixed bug came back)
+    #   - latest judge_validation accuracy vs threshold (Judge calibration)
+    #   - the canonical run's existence (pipeline is producing artifacts)
+    # State machine:
+    #   🟢 GREEN   — 0 new regressions in last batch AND no judge-validation
+    #                failure (or no validation run yet)
+    #   🟡 YELLOW  — Judge accuracy below threshold (calibration issue),
+    #                but no target-side regression
+    #   🔴 RED     — at least one new pass→fail transition (real target
+    #                regression — previously-fixed bug is back)
+    health_color, health_label, health_detail = "#16a34a", "🟢 HEALTHY", "All CI signals green."
+    try:
+        latest_reg_files = sorted(Path("evals/results").glob("regression_*.json"))
+        new_regs_recent = 0
+        if latest_reg_files:
+            r = json.loads(latest_reg_files[-1].read_text())
+            new_regs_recent = int((r.get("summary", {}) or {}).get("new_regressions", 0) or 0)
+        latest_jv_files = sorted(Path("evals/results").glob("judge_validation_*.json"))
+        jv_accuracy = None
+        jv_threshold = None
+        if latest_jv_files:
+            jv = json.loads(latest_jv_files[-1].read_text())
+            jv_accuracy = float(jv.get("accuracy", 0.0))
+            jv_threshold = float(jv.get("threshold", 0.70))
+        if new_regs_recent > 0:
+            health_color, health_label = "#dc2626", "🔴 REGRESSION"
+            health_detail = f"{new_regs_recent} new pass→fail transition(s) in the most recent regression batch — a previously-fixed bug has reappeared. See Exploits page."
+        elif jv_accuracy is not None and jv_accuracy < jv_threshold:
+            health_color, health_label = "#ca8a04", "🟡 CALIBRATION"
+            health_detail = f"Judge accuracy {jv_accuracy:.0%} below threshold {jv_threshold:.0%}. No target regression, but Judge prompt or human labels need iteration. See <a style='color:#fff;text-decoration:underline;' href='{REPO_URL}/blob/main/evals/judge_golden_set.json'>golden set</a>."
+        elif jv_accuracy is not None:
+            health_detail = f"Last regression: 0 new transitions · Judge accuracy: {jv_accuracy:.0%} (≥{jv_threshold:.0%} threshold)."
+        else:
+            health_detail = "Last regression: 0 new transitions · Judge validation not yet run."
+    except Exception as e:
+        health_color, health_label = "#64748b", "⚪ UNKNOWN"
+        health_detail = f"Could not read health signals: {e}"
+
+    st.markdown(
+        f"""
+<div style="background:{health_color}; color:#fff; padding:14px 18px; border-radius:10px; margin-bottom:16px; display:flex; justify-content:space-between; align-items:center;">
+  <div><span style="font-weight:700; font-size:1.05rem;">{health_label}</span> &nbsp;·&nbsp; <span style="opacity:0.9;">{health_detail}</span></div>
+</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
     # ── Hero banner ──
     st.markdown(
         f"""
@@ -1099,6 +1149,79 @@ elif page == "Trends":
             .properties(height=260)
         )
         st.altair_chart(chart_resil, use_container_width=True)
+
+        # ── Regression pass-rate over time (the "are fixes landing?" chart) ──
+        # Built from committed regression_*.json batches. Distinct from the
+        # resilience chart above: that one shows how attack-RUN verdicts trend
+        # (defended_rate up = attacks getting defended better today). THIS
+        # chart shows how PREVIOUSLY-CONFIRMED exploits replay — pass_rate
+        # going up = target-side fixes are actually being shipped.
+        reg_rows = []
+        for jf in sorted(Path("evals/results").glob("regression_*.json")):
+            try:
+                rd = json.loads(jf.read_text())
+            except Exception:
+                continue
+            s = rd.get("summary", {}) or {}
+            n_pass = int(s.get("pass", 0) or 0)
+            n_fail = int(s.get("fail", 0) or 0)
+            n_inc  = int(s.get("inconclusive", 0) or 0)
+            total  = n_pass + n_fail + n_inc
+            if total == 0:
+                continue
+            batch_id = rd.get("run_batch_id", jf.stem)
+            # batch_id format: reg_YYYYMMDD_HHMMSS_xxxxxx — extract the timestamp
+            ts = batch_id.split("_")[1:3] if batch_id.startswith("reg_") else []
+            ts_label = "_".join(ts) if ts else jf.stem
+            reg_rows.append({
+                "batch":          ts_label,
+                "n_exploits":     total,
+                "pass_rate":      round(n_pass / total, 4),
+                "fail_rate":      round(n_fail / total, 4),
+                "inconclusive_rate": round(n_inc / total, 4),
+                "new_regressions": int(s.get("new_regressions", 0) or 0),
+            })
+
+        if reg_rows:
+            st.divider()
+            st.subheader("Regression: are previously-known bugs being fixed?")
+            st.caption(
+                "Each batch replays every confirmed exploit against the live "
+                "target. **pass_rate climbing = target-side fixes are landing.** "
+                "**fail_rate flat near 100% = no fixes have shipped yet** (today's "
+                "reality). new_regressions > 0 on any bar = a previously-fixed "
+                "exploit reappeared (the CI-alert signal)."
+            )
+            reg_df = pd.DataFrame(reg_rows).sort_values("batch")
+            reg_long = pd.melt(
+                reg_df, id_vars=["batch", "n_exploits", "new_regressions"],
+                value_vars=["pass_rate", "fail_rate", "inconclusive_rate"],
+                var_name="metric", value_name="rate",
+            )
+            chart_reg = (
+                alt.Chart(reg_long)
+                .mark_line(point=True)
+                .encode(
+                    x=alt.X("batch:N", title=None, axis=alt.Axis(labelAngle=-30)),
+                    y=alt.Y("rate:Q", axis=alt.Axis(format=".0%"), scale=alt.Scale(domain=[0, 1])),
+                    color=alt.Color("metric:N",
+                        scale=alt.Scale(
+                            domain=["pass_rate", "fail_rate", "inconclusive_rate"],
+                            range=[VERDICT_COLOR_HEX["Defended"],
+                                   VERDICT_COLOR_HEX["Bypass"],
+                                   "#ca8a04"]),
+                        legend=alt.Legend(orient="bottom", title=None)),
+                    tooltip=["batch", "metric", alt.Tooltip("rate:Q", format=".1%"),
+                             alt.Tooltip("n_exploits:Q", title="exploits in batch"),
+                             alt.Tooltip("new_regressions:Q", title="pass→fail this batch")],
+                )
+                .properties(height=240)
+            )
+            st.altair_chart(chart_reg, use_container_width=True)
+            # Surface new-regression signal as a callout if any batch had one
+            recent_regs = sum(int(r["new_regressions"]) for r in reg_rows[-3:])
+            if recent_regs > 0:
+                st.error(f"🚨 {recent_regs} new regression(s) across the most recent 3 batches — see Exploits page for details.")
 
         st.divider()
         st.subheader("Cost per run + cost per attack")

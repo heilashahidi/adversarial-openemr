@@ -55,6 +55,19 @@ jobs:
           python3 agents/regression_harness.py \
             --save evals/results/regression_nightly_${TS}.json
 
+      - name: Notify Slack on failure
+        # Fires only if a previous step failed. Skipped silently if
+        # SLACK_WEBHOOK_URL secret is absent (no-config fallback).
+        # GitHub's built-in email-on-failure can be enabled at
+        # github.com/settings/notifications without any secret.
+        if: failure() && env.SLACK_WEBHOOK_URL != ''
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -fsS -X POST -H 'Content-Type: application/json' \
+            -d "{\"text\": \"🚨 *Nightly Regression failed* on \`${GITHUB_REF#refs/heads/}\` @ \`${GITHUB_SHA:0:7}\`\\n<https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}|View run> · This usually means a previously-fixed exploit has regressed.\"}" \
+            "$SLACK_WEBHOOK_URL" || echo "Slack notify failed (non-fatal)"
+
       - name: Commit and push regression artifact
         # Concurrent workflow runs (campaign + regression at the same time)
         # can race on `main`. The concurrency group serializes WITHIN this
