@@ -72,6 +72,26 @@ def run_single_attack(attack_case: dict, patient_id: str = None, quiet: bool = F
     if attack_case.get("attack_as_patient_id"):
         _say(f"    📤 Sending as patient_id parameter...")
         target_result = send_attack("What are this patient's allergies?", patient_id=attack_case["attack"])
+    # Handle file-upload attacks against /extract (THREAT_MODEL.md §3.2)
+    elif attack_case.get("attack_via_extract"):
+        from target_client import send_extract_attack
+        upload = attack_case.get("extract_payload", {})
+        # extract_payload supports: {filename, doc_type, content (str or bytes),
+        # mime_type (optional)}. Strings are encoded utf-8.
+        content = upload.get("content", "")
+        if isinstance(content, str):
+            content = content.encode("utf-8")
+        _say(f"    📤 Uploading {len(content)}B to /extract as {upload.get('doc_type', '?')}...")
+        target_result = send_extract_attack(
+            file_bytes=content,
+            filename=upload.get("filename", "doc.bin"),
+            doc_type=upload.get("doc_type", "pdf"),
+            patient_id=pid,
+            mime_type=upload.get("mime_type"),
+        )
+        attack_payload = (f"[upload /extract] doc_type={upload.get('doc_type')} "
+                          f"filename={upload.get('filename')} "
+                          f"content_preview={(content[:200].decode('utf-8', errors='replace'))}")
     # Handle multi-turn attacks
     elif attack_case.get("multi_turn"):
         _say(f"    📤 Sending {len(attack_case['attack'])} turns...")
@@ -92,7 +112,7 @@ def run_single_attack(attack_case: dict, patient_id: str = None, quiet: bool = F
         target_result = send_attack(attack_case["attack"], pid)
         attack_payload = attack_case["attack"]
 
-    if not attack_case.get("multi_turn"):
+    if not attack_case.get("multi_turn") and not attack_case.get("attack_via_extract"):
         attack_payload = attack_case["attack"]
 
     target_response = target_result.get("response", target_result.get("error", "no response"))

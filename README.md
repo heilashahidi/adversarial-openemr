@@ -91,7 +91,7 @@ Four-stage W3 deliverable:
 |---|---|---|
 | 1 — Stand up the target | Live URL above, this section | ✅ |
 | 2 — Threat Model | [`THREAT_MODEL.md`](./THREAT_MODEL.md) — 29 sub-vectors across 7 categories (26 exercisable + 3 supply-chain probe seeds), OWASP LLM mapping, risk matrix | ✅ |
-| 3 — Seed Attack Suite + Agent Prototype | [`evals/seed_attacks.py`](./evals/seed_attacks.py) (47 cases, 100% sub-vector coverage), Triage + Judge running live | ✅ |
+| 3 — Seed Attack Suite + Agent Prototype | [`evals/seed_attacks.py`](./evals/seed_attacks.py) (50 cases including 3 file-upload seeds for /extract, 100% sub-vector coverage), Triage + Judge running live | ✅ |
 | 4 — Platform Architecture | [`ARCHITECTURE.md`](./ARCHITECTURE.md) — 5-agent design, message schemas, scoring formula, regression pipeline | ✅ |
 
 ### All five agents implemented

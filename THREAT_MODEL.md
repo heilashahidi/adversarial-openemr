@@ -477,7 +477,7 @@ Every documented sub-vector below has a row. Rows are sorted by `Impact × Likel
 
 This section describes where the platform actually is, not where it was going at first draft. Updated as findings land.
 
-**Phase 1 (MVP) — DONE.** 47 seed cases across all 7 categories, covering **29 of 29 sub-vectors at 100%**. The 26 behavioral sub-vectors get full /chat exercises (40 initial cases + 4 high-tier additions on 2026-05-13 + 3 SUP-* probes); the 3 §7 supply-chain sub-vectors get **probe seeds** rather than full exercises (see §7 preamble — the platform's HTTP /chat vector can't reach the upstream attack itself). Two-tier Judge + Tier-0 deterministic gates running live. LangSmith tracing on every campaign. Dashboard deployed at [heilashahidi-adversarial-openemr.hf.space](https://heilashahidi-adversarial-openemr.hf.space/).
+**Phase 1 (MVP) — DONE.** 50 seed cases across all 7 categories, covering **29 of 29 sub-vectors at 100%** and **both** target attack surfaces (`/chat` + `/extract`). The 26 behavioral sub-vectors get full /chat exercises (40 initial cases + 4 high-tier additions on 2026-05-13 + 3 SC-* upload seeds against /extract added 2026-05-15); the 3 §7 supply-chain sub-vectors get **probe seeds** rather than full exercises (see §7 preamble). Two-tier Judge + Tier-0 deterministic gates running live. LangSmith tracing on every campaign. Dashboard deployed at [heilashahidi-adversarial-openemr.hf.space](https://heilashahidi-adversarial-openemr.hf.space/).
 
 **Phase 1 results (40-case live run, 2026-05-12):**
 
