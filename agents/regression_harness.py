@@ -33,6 +33,17 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from target_client import (  # noqa: E402
     send_attack, send_multi_turn_attack, send_extract_attack, check_target_health,
 )
+# Variant-robustness check (Gap #6 fix, 2026-05-15): per batch, also replay
+# K deterministic mutations of each seed-level exploit. Catches "fix held
+# against literal seed but breaks on a trivial paraphrase" — a real concern
+# the Adversarial Robustness guideline calls out. Importing the same
+# encoding operators the Red Team uses keeps the two pipelines aligned.
+try:
+    sys.path.insert(0, str(Path(__file__).parent.parent / "agents"))
+    from red_team_agent import _mutate_encode  # noqa: E402
+except ImportError:
+    def _mutate_encode(text, scheme="base64"):
+        return text  # graceful no-op if Red Team module isn't available
 
 # Seed lookup for surface-aware replay (see _replay_one_attack docstring).
 # Surface info isn't stored on the ExploitArtifact today (Option A fix); this
@@ -230,6 +241,48 @@ def _replay_one_attack(exploit_or_payload, multi_turn: bool = False) -> tuple:
     return result.get("response", result.get("error", "")), result.get("status_code", 0)
 
 
+# ── Variant-robustness check ──────────────────────────────────────────────
+
+# Schemes applied per seed-level exploit. base64 + unicode_homoglyph cover
+# two structurally different mutation classes — wrapper-pattern (which
+# detects whether a fix is wrapper-aware) and inline-substitution (which
+# detects whether a fix relies on surface pattern matching of the original
+# attack text). 2 variants per exploit keeps the batch wallclock bounded.
+_VARIANT_SCHEMES = ("base64", "unicode_homoglyph")
+
+
+def _is_seed_level_exploit(exploit: dict) -> bool:
+    """True iff this exploit corresponds to a SEED_ATTACKS entry (not a
+    Red Team mutation). Mutations of mutations don't add coverage."""
+    return exploit.get("attack_id") in _SEED_BY_ID
+
+
+def _build_variant_exploit(exploit: dict, scheme: str) -> dict:
+    """Construct a synthetic exploit dict whose attack_sequence is the
+    seed's attack text wrapped in the given deterministic mutation. The
+    returned dict mimics an ExploitArtifact closely enough that
+    _replay_one_attack + _classify_response handle it without changes."""
+    seed = _SEED_BY_ID.get(exploit["attack_id"], {})
+    # Skip upload exploits — wrapping a binary PDF in base64 wouldn't be a
+    # meaningful variant. Future work: variant mutations specific to the
+    # upload surface (e.g., zip-bomb PDFs).
+    if seed.get("attack_via_extract"):
+        return None
+    original_text = seed.get("attack")
+    if not isinstance(original_text, str):
+        return None  # multi-turn variants need separate handling
+    mutated = _mutate_encode(original_text, scheme)
+    return {
+        "id":               exploit["id"],   # so versioning still works
+        "attack_id":        f"{exploit['attack_id']}-variant-{scheme[:3]}",
+        "category":         exploit.get("category", ""),
+        "subcategory":      exploit.get("subcategory", ""),
+        "severity":         exploit.get("severity", "high"),
+        "attack_sequence":  [mutated],
+        "observed_behavior": exploit.get("observed_behavior", ""),
+    }
+
+
 # ── Exploits read / write ─────────────────────────────────────────────────
 
 def _load_exploits() -> list[dict]:
@@ -298,7 +351,25 @@ def run_regression() -> dict:
     new_regressions = []          # pass → fail transitions in THIS batch
     category_transitions = defaultdict(list)   # for cross-category analysis
 
+    # Build the replay list: every confirmed exploit + variants of every
+    # seed-level exploit. Variant rows are appended after the originals so
+    # the print log shows "original then variants" per exploit.
+    replay_list = []
     for ex in exploits:
+        replay_list.append(("original", ex))
+        if _is_seed_level_exploit(ex):
+            for scheme in _VARIANT_SCHEMES:
+                variant = _build_variant_exploit(ex, scheme)
+                if variant is not None:
+                    replay_list.append(("variant", variant))
+
+    n_variants = sum(1 for kind, _ in replay_list if kind == "variant")
+    if n_variants:
+        print(f"  + {n_variants} deterministic variants of seed-level exploits "
+              f"(variant-robustness check)")
+        print()
+
+    for kind, ex in replay_list:
         atk_id = ex.get("attack_id", "?")
         # Pass the full exploit dict so _replay_one_attack can branch on
         # attack_surface for upload-path seeds (SC-06/07/08). For everything

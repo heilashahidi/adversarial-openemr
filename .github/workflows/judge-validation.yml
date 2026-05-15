@@ -1,0 +1,75 @@
+name: Judge Self-Validation
+
+# Weekly calibration check on the hand-labeled golden set
+# (evals/judge_golden_set.json). Closes the "validate the judge itself"
+# gap — the architecture's stated #1 worry (ARCHITECTURE.md §12). If the
+# Judge's verdict-match against the human-labeled cases falls below
+# threshold, this workflow fails and the run shows as red in Actions —
+# CI signal that calibration drifted or that the broadened partial
+# criteria (commit 685cee9) need iteration.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'   # 06:00 UTC Monday — weekly, before the daily regression cron
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: judge-validation
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Judge validation
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          TS=$(date -u +%Y%m%d_%H%M%S)
+          python3 scripts/validate_judge.py \
+            --save evals/results/judge_validation_${TS}.json
+
+      - name: Commit and push validation artifact
+        if: always()  # commit the artifact even if validation failed — that IS the signal
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name  "judge-validation-bot"
+          git config user.email "actions@github.com"
+          git add evals/results/judge_validation_*.json || true
+          if git diff --cached --quiet; then
+            echo "No new validation artifact to commit."
+            exit 0
+          fi
+          git commit -m "Weekly Judge validation $(date -u +%Y-%m-%d) [skip ci]"
+          for attempt in 1 2 3; do
+            if git push 2>&1; then
+              echo "Pushed on attempt $attempt."
+              exit 0
+            fi
+            echo "Push attempt $attempt rejected — rebasing on origin/main and retrying."
+            git fetch origin main
+            git rebase origin/main
+            sleep $((attempt * 5))
+          done
+          echo "Push failed after 3 attempts."
+          exit 1
