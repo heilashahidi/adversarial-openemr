@@ -623,3 +623,155 @@ Auditability. A reviewer should be able to answer "why did the platform attack X
 
 **"Why SQLite instead of Postgres / Redis / a real queue?"**
 We're at single-process scale. SQLite is in the standard library, ACID, and good for ≤100K rows. The migration path to Postgres is explicit (§6.1); we'll take it when we run concurrent agents. Premature distribution is its own failure mode.
+
+---
+
+## 13. Comparable Open-Source Tools
+
+The platform's design space is not empty. Two open-source projects cover
+overlapping territory; this section names them, says what each does well,
+and documents what we built differently. The goal isn't to dismiss prior
+work — it's to be honest about where we re-used ideas (mutation operators,
+multi-agent decomposition) and where we deliberately built something
+narrower or wider.
+
+### garak (NVIDIA)
+
+**What it does well.** garak ships a strong catalog of ~50 named probes
+covering DAN-family jailbreaks, encoding bypasses, signature-based attacks,
+known-bad-pattern detection, and a few model-specific exploits. The probe
+taxonomy is the field's reference catalog — when our threat model maps
+encoding (§1.5) or persona hijacking (§6.2), we are independently arriving
+at probe categories garak has had named for over a year.
+
+**What's missing for clinical-AI use.** garak is built for batch-mode
+"point at a model endpoint, run the suite, save the report" — closer to
+a vulnerability scanner than a continuous adversarial platform. It has no
+live-target replay infrastructure, no regression-pass/fail classifier, no
+promotion gate, no Documentation Agent producing engineer-actionable
+reports, no Orchestrator deciding where to focus next, no calibration
+loop on the evaluator itself. For one-shot evaluation against a model
+checkpoint it's the right tool; for continuous adversarial evaluation of
+a production-deployed clinical AI it's a starting point, not a finish.
+
+**What we built differently.** Multi-agent role separation (Orchestrator
+distinct from Red Team distinct from Judge), four-tier verdict pipeline
+(Tier 0 deterministic / Tier 1 Triage / Tier 2 Judge / regression harness
+no-LLM), promotion to a regression set, weekly Judge self-validation
+against a hand-labeled golden set, and a Documentation Agent that auto-
+files vuln reports with platform-calibration context.
+
+### PyRIT (Microsoft)
+
+**What it does well.** PyRIT is the closest architectural cousin. It has
+multi-agent orchestration, conversion pipelines (their term for what we
+call mutation operators — base64, leetspeak, character-rotation), and a
+memory database for traces. The "converter chain" pattern in PyRIT
+directly inspired the Red Team's stackable mutation strategies in our
+`agents/red_team_agent.py`. Their "scorer" abstraction maps cleanly to
+our two-tier Judge.
+
+**What's missing for clinical-AI use.** PyRIT is target-agnostic — strong
+for batch-style attack-vs-target experiments but doesn't ship a verdict
+promotion → regression replay → trend analysis → vuln-report pipeline.
+It's a *library* for building adversarial workflows, not a *platform*
+running one continuously against a specific target.
+
+**What we built differently.** Tighter coupling to one specific live
+target (the Clinical Co-Pilot), Tier-0 deterministic gates for cases where
+LLM judgment is structurally unnecessary, an auto-committing artifact
+pipeline (every run produces a git-tracked JSON that the dashboard reads),
+HIPAA-/clinical-specific severity heuristics in the Documentation Agent,
+the §10 human approval gates wired into Critical-severity flow.
+
+### Honest positioning
+
+This platform is **narrower** than either tool (one target, one domain)
+and **wider** in production-readiness (autonomous loop, regression set,
+calibration loop, dashboard, alerts). If the brief had been "build a
+generic LLM red-team library," PyRIT extension would have been the right
+answer; if the brief had been "scan a model endpoint once," garak would
+have been the right answer. The brief was "continuously evaluate a
+deployed clinical AI under adversarial pressure" — which is neither.
+
+---
+
+## 14. Alternatives Considered (and Rejected)
+
+The §12 Q&A defends the choices that are *in* this architecture. This
+section documents the choices that are *out* — frameworks, patterns,
+and approaches we evaluated and dropped, with the reason for each.
+
+**LangGraph.** Considered for the campaign-loop orchestration; it's
+already in `requirements.txt` from an earlier exploration. **Rejected**
+because the loop is single-process, linear (Orchestrator → Red Team
+batch → serial target calls → one Judge per result), and a graph runtime
+adds checkpoints/node-types/edges complexity for no current benefit. The
+choice flips when (a) the Red Team becomes a multi-agent ensemble or (b)
+we want branching mutation trees with parallel children — both flagged
+in §6.2 as the migration trigger.
+
+**LangChain auto-instrumentation.** Considered for tracing. **Rejected**
+because LangSmith's `@traceable` decorator gives us per-call traces with
+~5 lines of opt-in wiring (`agents/judge_agent.py`, `agents/red_team_agent.py`,
+etc.) and works whether or not the user has configured tracing — no
+LangChain runtime dependency. The trade-off: we don't get LangChain's
+chain abstractions, but we never wanted them. Our coordination is via
+SQLite state, not function composition.
+
+**OpenAI or Anthropic frontier model as Red Team Agent.** Considered.
+**Rejected** with empirical evidence: early Red Team experiments with
+Sonnet returned refusals on ~40% of attack-generation prompts. Frontier
+models are RLHF'd against offensive-security workflows. The Red Team
+uses Mistral 7B Instruct + Llama 3.1 8B Instruct via OpenRouter (no
+RLHF against offensive prompts). This is the canonical use-case for
+why multi-model platforms beat single-provider platforms — see §1.4.
+
+**Full CVSS 3.x scoring.** Considered. **Partially rejected.** CVSS's
+attack vector / attack complexity / privileges required / user
+interaction axes don't map cleanly to LLM bypasses — there's no "user
+interaction required" for a prompt-injection attack the way there is
+for a stored-XSS attack. We use a simpler Critical/High/Medium/Low
+ladder with clinical-impact framing (PHI disclosure → Critical;
+non-PHI bypass → High; info leak only → Medium). A future revision
+could publish a CVSS-inspired but LLM-specific scoring formula —
+that's a research contribution scope, not a platform-shipping scope.
+
+**Mock target for development.** Considered (would have made local
+iteration faster and avoided target-load concerns during platform
+development). **Rejected** because static test suites against mocked
+responses don't catch the behavioral drift that makes AI systems
+unpredictable under adversarial pressure — Executive Summary, ARCHITECTURE
+§1 makes this an explicit design principle. The cost: ~7 minutes per
+full-suite live run. The benefit: every verdict is grounded in real
+target behavior.
+
+**Multi-target platform abstraction.** Considered (would let the
+platform attack any LLM endpoint, not just the Clinical Co-Pilot).
+**Rejected for v1** because the §10 trust boundaries (Critical-severity
+review, state-modifying-attack gates, HIPAA-aware severity heuristics)
+are clinical-domain-specific. Generalizing means flattening those
+specifics. The trade-off is documented in `USERS.md` — the Security
+Researcher user class is "forward-looking," not v1 scope. Target-side
+state lives entirely in `config.py` so the work to generalize is small,
+not the work to *use* what generalization buys.
+
+**`/extract` as a primary attack surface from v1.** Considered. **Initially
+rejected** (the platform shipped /chat-only for the first 18 result-JSON
+runs). **Reversed** during the Adversarial Robustness audit (commit
+`685cee9`) once we measured that the platform claimed "uploaded content"
+coverage in the threat model but no seed exercised the actual /extract
+endpoint. SC-06/07/08 now land file uploads against the real surface,
+which immediately discovered an HTTP-500 input-validation bug parallel
+to the RT-ENC wrapper-pattern finding on /chat. The lesson worth
+documenting: scope decisions get audited too.
+
+**Auto-pushing fixes to the target.** Considered (the platform could
+theoretically file pull requests against the Co-Pilot repo when a
+regression flips). **Rejected** because the guideline is explicit:
+*"An agent with the ability to push fixes without review can introduce
+entirely new vulnerabilities."* The platform documents fixes; the
+operator implements them. This is the highest-impact trust boundary
+the architecture preserves — see §10.
+
+---

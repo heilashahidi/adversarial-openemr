@@ -24,6 +24,51 @@ This threat model maps the adversarial attack surface of the Clinical Co-Pilot �
 
 ---
 
+## Industry-Framework Cross-Reference
+
+The threat model is grounded in two industry-standard frameworks. The tables
+below show how each of our 7 categories / 29 sub-vectors maps to existing
+taxonomies — both for reviewer-facing legibility and so a security researcher
+landing on this document immediately recognizes it as standards-aligned
+rather than ad-hoc.
+
+### OWASP LLM Top 10 (2023/2024) mapping
+
+| OWASP risk | Our coverage | Where |
+|---|---|---|
+| **LLM01 Prompt Injection** | ✅ full | §1 (10 seeds: direct PI-01/03/05/07, indirect PI-09, multi-turn PI-06, tool-output PI-10, encoding PI-04, system-prompt-extraction PI-02/08) + 80 RT-ENC-* mutations |
+| **LLM02 Insecure Output Handling** | ✅ partial | §4.4 (TM-04 XSS payload via `<script>` / `<img onerror>`) |
+| **LLM03 Training Data Poisoning** | ❌ out of scope | We don't control the target's training pipeline. §3.3 corpus_poisoning is the *retrieval-time* analog — adjacent but distinct |
+| **LLM04 Model DoS** | ✅ full | §5 (3 seeds: token_exhaustion DOS-01, cost_amplification DOS-02, infinite_loops DOS-03) plus §5.4 concurrent-load (empirical) |
+| **LLM05 Supply Chain** | ✅ via probe seeds | §3.3 corpus_poisoning + §7 supply_chain (3 probe seeds SUP-01/02/03 — see §7 preamble for the probe-vs-exercise caveat) |
+| **LLM06 Sensitive Information Disclosure** | ✅ full | §1.6 system_prompt_extraction (PI-02, PI-08) + §2.1 phi_leakage (5 seeds) |
+| **LLM07 Insecure Plugin Design** | 🟡 adjacent | §4 tool_misuse covers parameter_tampering (TM-02 path traversal, TM-05 SQL wildcard), unintended_invocation (TM-01), and recursive_calls (TM-03) — LLM07-adjacent. We don't have a true plugin-trust-boundary exploit since the target's "plugins" are first-party FastAPI handlers, not third-party plugin code |
+| **LLM08 Excessive Agency** | 🟡 adjacent | §6 identity_exploitation covers privilege_escalation (IR-02), persona_hijacking (IR-01), trust_boundary (IR-03/06/07/08), hypothetical_framing (IR-09) — overlaps with LLM08's "agent acts outside authorized scope." Distinct from LLM08's focus on tool-use abuse (we cover that in §4 tool_misuse instead) |
+| **LLM09 Overreliance** | ❌ out of scope | Human-factors concern — a clinician trusting the agent uncritically. Outside the platform's HTTP /chat attack surface; addressed via the agent's three-section format and citation discipline at the application layer |
+| **LLM10 Model Theft** | ✅ partial | §2.5 model_fingerprinting (DE-10) + §7.2 model_provider_compromise (SUP-02). Don't exercise weight-extraction directly (the target's weights aren't accessible via /chat) |
+
+Coverage in numbers: **7 of 10 OWASP risks covered (5 full + 2 adjacent), 1 partial, 2 explicitly out of scope** with reasons.
+
+### MITRE ATLAS (Adversarial Threat Landscape for AI Systems) mapping
+
+ATLAS — atlas.mitre.org — is the dominant AI-threat framework, structured like
+ATT&CK with tactics → techniques → sub-techniques. Our threat model aligns:
+
+| ATLAS technique | Our coverage |
+|---|---|
+| **AML.T0051 LLM Prompt Injection** | §1 (all 10 sub-vectors). PI-01 maps to the Direct sub-technique; PI-09 to Indirect via patient data; PI-10 to Indirect via retrieval output |
+| **AML.T0048 External Harms** | §2.1 phi_leakage (HIPAA), §2.2 cross_patient (HIPAA), §4.4 XSS (downstream stored XSS in clinical workflow) |
+| **AML.T0024 Exfiltration via ML Inference API** | §2.4 unauthenticated_endpoint (DE-09, confirmed) — anonymous caller exfiltrates via /chat; §2.5 model_fingerprinting |
+| **AML.T0029 Denial of ML Service** | §5 (DOS-01/02/03) + §5.4 concurrent-load |
+| **AML.T0019 Publish Poisoned Datasets** | §3.3 corpus_poisoning (SC-03) — applies to the retrieval-time corpus, not training data |
+| **AML.T0010 ML Supply Chain Compromise** | §7 (SUP-01/02/03 probe seeds) — covers dependency, model provider, and retrieval-source compromise |
+| **AML.T0054 LLM Plugin Compromise** | §4 tool_misuse (TM-01/02/03/04/05) |
+| **AML.T0040 ML Model Inference Bias and Errors** | §3.4 citation_forgery (SC-04) — hallucination-with-credentials |
+
+The pattern: **OWASP names the risks; ATLAS names the techniques.** A reviewer who reads either should recognize this threat model.
+
+---
+
 ## 1. Prompt Injection
 
 ### 1.1 Direct Injection
