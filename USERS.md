@@ -29,23 +29,28 @@ The adversarial platform has four classes of human users and one class of machin
 - Run a campaign locally: `python3 evals/run_attacks.py`
 - Run a fast probe before paying for a full campaign: `python3 evals/run_attacks.py --smoke`
 - Re-run a single attack to investigate a verdict: `python3 evals/run_attacks.py --id DE-09`
-- Review the latest run on the deployed dashboard
+- Run an adaptive Orchestrator-driven campaign: `python3 evals/run_campaign.py`
+- Run a deterministic mutation campaign: `python3 evals/run_encode_mutations.py` (the path that produced the 80 RT-ENC wrapper-pattern findings)
+- Re-validate Judge calibration against the golden set: `python3 scripts/validate_judge.py`
+- Vacate a false-positive verdict: `python3 agents/documentation_agent.py --withdraw <attack_id> --reason "..."`
+- Rebuild a wiped state.db from committed JSONs: `python3 scripts/backfill_state_from_results.py`
+- Review the latest run on the deployed dashboard (health badge at top of Overview is the entry point)
 - Investigate a specific Judge verdict in LangSmith by clicking through the trace tree
 - Decide whether a partial-success seed warrants a Red Team mutation campaign
-- Approve a critical-severity report before filing
-- Approve a state-modifying attack before execution
+
+**What the operator does NOT do (autonomous cron handles it):**
+- Trigger periodic campaigns — `adaptive-campaign.yml` fires every 6h, `regression-nightly.yml` daily, `judge-validation.yml` weekly
+- Mirror commits to HF + GitLab — `mirror-main.yml` propagates every push automatically
+- Check whether anything regressed — Slack webhook fires on workflow failure if `SLACK_WEBHOOK_URL` secret is set
 
 **Architecture this drives:**
 - `state_store` exists so the operator can query / inspect / replay any past finding without re-running attacks (zero $-cost replay)
 - `--smoke`, `--id`, `--category`, `--workers` CLI flags exist for targeted re-runs and graceful scaling
-- Human approval gates (ARCHITECTURE.md §10) sit between agents and irreversible actions
+- Human approval gates (ARCHITECTURE.md §10) sit between agents and irreversible actions: Critical-severity report files, state-modifying attacks, novel-sub-category first runs
+- `--withdraw` CLI + non-destructive DB columns (`withdrawn_at`, `withdrawn_reason`) so a false positive doesn't require manual file editing
+- Judge golden set + weekly cron means the operator doesn't have to remember to re-check calibration
 - LangSmith tracing is on by default so the operator can debug any verdict by clicking through
-- Dashboard exists as a read-only operational view — fast situational awareness without rerunning
-
-**What the operator should NOT have to do:**
-- Manually classify obvious clean refusals → Triage agent handles this
-- Manually score sub-vector priorities → Orchestrator's deterministic scoring does this (ARCHITECTURE.md §3.1)
-- Manually write vulnerability reports → Documentation Agent does this (designed; not yet built)
+- Dashboard health badge surfaces three CI signals (regression transitions, Judge accuracy, pipeline health) in one indicator
 
 ---
 
@@ -64,15 +69,20 @@ The adversarial platform has four classes of human users and one class of machin
 - README has the target URL, dashboard URL, repo URL in the first paragraph (no scrolling)
 - `--smoke` flag exists with **zero API-key dependency** — graders can verify in 5 seconds without paying
 - Dashboard is hosted publicly on Hugging Face Spaces — **anonymous-public**, no login gate, no Streamlit Cloud auth-required surprise
-- Committed result JSONs in `evals/results/` document run-over-run reproducibility (6+ runs, consistent verdicts)
-- Threat-model `Tested by` rows and seed-case `threat_model_ref` fields link rubric items to evidence bidirectionally — graders can audit either direction
-- ARCHITECTURE.md §12 FAQ exists specifically to answer "why did you do X?" in 60 seconds
+- **🟢/🟡/🔴 Health badge** at the top of Overview gives a single-glance answer to "is this platform healthy right now?" — derived from regression transitions + Judge accuracy + recent run state
+- Regression-pass-rate-over-time chart on Trends page answers the "are fixes landing?" question with one Altair chart
+- **Calibration footer in every vulnerability report** — every `reports/*.md` carries the latest Judge accuracy from the golden set, so the grader sees that the verdict's per-call confidence is paired with the Judge's own measured accuracy (avoids "trust the LLM verdict" anti-pattern)
+- 23+ committed result JSONs in `evals/results/` document run-over-run reproducibility across the full session arc (24 → 40 → 44 → 47 → 50 cases)
+- Threat-model `Tested by` rows + seed-case `threat_model_ref` fields link rubric items to evidence bidirectionally
+- THREAT_MODEL.md now includes **OWASP LLM Top 10 + MITRE ATLAS cross-reference tables** so a security-savvy grader sees standards alignment in 30 seconds
+- ARCHITECTURE.md §12 FAQ (defensible Q&A), §13 (comparable tools: garak / PyRIT positioning), §14 (alternatives considered + rejected with rationale)
 
 **What the grader should NOT have to do:**
 - Sign up for an OpenRouter account to verify the platform works
 - Run a 7-minute attack suite to see basic functionality
 - Read 1,200 lines of architecture markdown to find the agent roles
 - Click through five pages to find the live target URL
+- Click into the Actions tab to find out whether the platform is healthy — the badge surfaces it on the homepage
 
 ---
 
@@ -81,22 +91,27 @@ The adversarial platform has four classes of human users and one class of machin
 **Who they are:** the Co-Pilot development team — the people responsible for fixing what the platform finds. In this project it is the same individual as the Operator, but the architecture treats them as separable.
 
 **Workflows:**
-- Receive a vulnerability report from the Documentation Agent (designed; not yet implemented)
-- Cross-reference the finding with the threat model and risk matrix
-- Decide remediation priority
+- Receive a vulnerability report — **auto-filed by the Documentation Agent** on every new exploit promotion (`run_attacks.py` + `run_campaign.py` invoke it; Critical-severity reports hold for human review per §10)
+- Read one **consolidated report per root cause** instead of N reports for N variants — `reports/RT-ENC-wrapper-pattern.md` covers all 80 wrapper-pattern exploits with one fix plan
+- Cross-reference the finding with the threat model + OWASP LLM + MITRE ATLAS labels in THREAT_MODEL.md
 - Implement the fix
-- Trigger the regression harness to confirm the fix holds (designed; not yet implemented)
+- Trust the regression harness to validate — runs nightly, exits non-zero on pass→fail transitions, Slack-alerts on failure
+- Watch the regression-pass-rate trend chart to see fixes landing in aggregate
 
 **Architecture this drives:**
-- Vulnerability Report Format (ARCHITECTURE.md §9) is structured for engineer-actionable triage: ID, Severity, Category, Description, Reproduction sequence, Observed vs Expected, Remediation, Status
-- Every confirmed bypass carries `threat_model_ref` so the maintainer reads the report and immediately sees which sub-vector it tests
-- The regression harness (ARCHITECTURE.md §4.3) re-runs every promoted exploit on each target deploy — "is this fix done?" is mechanically answerable, not opinion-based
-- The platform attacks the **deployed** target, not a mock — fixes are validated against the exact surface clinicians use
+- Vulnerability Report Format (ARCHITECTURE.md §9) is structured for engineer-actionable triage: ID, Severity, Category, Description, Reproduction (deterministic — copy-pasteable `curl`), Observed vs Expected, Remediation, Status
+- **Calibration footer** on every report communicates the Judge's golden-set accuracy alongside the per-call confidence — the maintainer knows whether to trust the verdict
+- Every confirmed bypass carries `threat_model_ref` so the maintainer immediately sees which sub-vector + OWASP/ATLAS technique it tests
+- The regression harness re-runs every promoted exploit on each target deploy; **fail-rate dropping is the visible signal that fixes are landing**
 - The §2.4 finding's seed case (DE-09) is re-probed every campaign — the day auth is added at the HTTP layer, the DE-09 verdict will flip from `bypass` to `defended` automatically
+- Surface-aware replay means upload-path exploits (SC-06/07/08) replay against `/extract` not `/chat`
+- Variant-robustness extension catches "fix held for the literal seed but breaks on a base64-wrapped variant" before the next adaptive campaign would find it
 
 **What the target maintainer should NOT have to do:**
-- Read the entire campaign log to find the relevant finding → Documentation Agent extracts the actionable subset
+- Read the entire campaign log to find the relevant finding → Documentation Agent extracts it as a report
+- Triage 80 individual reports for the wrapper-pattern variants → one consolidated report covers all 80 with the same fix plan
 - Decide whether behavioral drift counts as a fix → regression harness flags drift as `inconclusive`, not as remediation
+- Manually re-validate after deploying a fix → the nightly cron does it and posts to Slack if anything regressed
 
 ---
 
@@ -112,14 +127,18 @@ The adversarial platform has four classes of human users and one class of machin
 
 **Architecture this drives:**
 - Target-side state lives entirely in `config.py` — **one file to change** to point at a new target
-- Seed cases are a list of dicts in `seed_attacks.py` — appendable, no schema migration; per-case `threat_model_ref` lets the researcher map their own sub-vectors
+- Seed cases are a list of dicts in `seed_attacks.py` — appendable, no schema migration; per-case `threat_model_ref` lets the researcher map their own sub-vectors; `attack_via_extract` flag enables non-`/chat` surfaces
 - Threat model is markdown — editable by hand; the platform doesn't depend on a structured threat-model parser
 - The platform makes no target-specific assumptions in the agent code (everything specific to the Co-Pilot is in `config.py` or `seed_attacks.py`)
 - Provider pinning is opt-in via `extra_body` — a researcher could disable it to compare verdicts across LLM providers
+- Mutation operators in `red_team_agent._mutate_encode` are reusable building blocks for novel mutation pipelines (base64, rot13, unicode_homoglyph; fragment + paraphrase + embed for AI-driven variants)
+- Judge golden set + validation workflow is generic — point at a different target, build a target-specific golden set, run the same calibration loop
+- ARCHITECTURE.md §13 comparison vs **garak / PyRIT** documents where this platform fits in the field — useful for a researcher deciding which tool to adopt or extend
 
 **What the security researcher should NOT have to do:**
 - Rewrite the agent code to adapt to a new target
 - Re-derive the message schemas — they're target-agnostic (CampaignDirective, AttackPayload, etc. don't know about clinical specifics)
+- Re-invent the multi-tier verdict pipeline — Tier-0 deterministic gates / Tier-1 Triage / Tier-2 Judge / regression-harness rule-classifier work the same way against any target
 
 ---
 
@@ -128,12 +147,14 @@ The adversarial platform has four classes of human users and one class of machin
 **Who they are:** the Orchestrator, Red Team, Triage, Judge, and Documentation Agents — autonomous code that reads and writes the state store as **inter-agent communication**.
 
 **Workflows:**
-- Orchestrator reads the `coverage` table, scores every sub-vector, writes a `CampaignDirective` for the next campaign
-- Red Team reads the directive + `findings` table (for partial-success mutation seeds), generates `AttackPayload`s
-- Target Client (deterministic) reads payloads, writes `TargetResponse`s
-- Triage reads (payload, response, expected_safe), writes a Tier-1 verdict (`defended`) or an escalation flag
+- Orchestrator reads the `coverage` table + `regression_runs` + cost ledger, scores every sub-vector with a deterministic 6-factor formula, writes a `CampaignDirective` for the next campaign
+- Red Team reads the directive + `findings` table (for partial-success mutation seeds), generates `AttackPayload`s with 6 mutation strategies (paraphrase, escalate, encode, fragment, embed, replay-with-mutation)
+- Target Client (deterministic) reads payloads, writes `TargetResponse`s — branches between `/chat` and `/extract` based on `attack_via_extract`
+- **Tier-0 Deterministic Gate** intercepts cases where the verdict is structurally decidable (e.g., token_exhaustion via payload-size threshold) — returns verdict at $0 with no LLM call
+- Triage reads (payload, response, expected_safe), writes a Tier-1 verdict (`defended`) or an escalation flag — structurally cannot emit `bypass`
 - Judge reads the same triple on escalation, writes the final `Verdict` (bypass / defended / partial)
-- Documentation Agent reads confirmed `ExploitArtifact`s, writes vulnerability reports
+- Documentation Agent reads confirmed `ExploitArtifact`s, writes vulnerability reports — **auto-fires on promotion** (no human in the loop)
+- Regression Harness loads all non-withdrawn exploits + variants of seed-level exploits, replays surface-aware (chat vs extract), classifies pass/fail/inconclusive deterministically
 
 **Architecture this drives:**
 - All inter-agent messages are JSON in the shared state store — **no direct function calls between agents**
@@ -151,10 +172,10 @@ A compact crosswalk — every architectural component traces back to at least on
 
 | If you remove this user… | …you can remove this architecture |
 |---|---|
-| Platform Operator | Human approval gates (no human to approve), state store (no replay needed), CLI filter flags |
-| Grader / Reviewer | Public HF dashboard, `--smoke` no-auth path, target URL in README, committed result JSONs |
-| Target Maintainer | Documentation Agent, structured Vulnerability Report Format, Regression Harness |
-| Security Researcher | Config-driven target, target-agnostic message schemas, threat-model-as-markdown |
-| The Agents | Most of the platform (but the data still needs to flow somewhere) |
+| Platform Operator | Human approval gates, `--withdraw` CLI, state store + backfill script, CLI filter flags, Judge golden-set calibration loop, Slack alerts on workflow failure |
+| Grader / Reviewer | Public HF dashboard, health badge on Overview, regression-pass-rate trend chart, calibration footer in reports, committed result JSONs, OWASP/ATLAS cross-references, `--smoke` no-auth path |
+| Target Maintainer | Documentation Agent (auto-fires on promotion), consolidated root-cause reports (RT-ENC-wrapper-pattern.md), structured Vulnerability Report Format with deterministic reproduction, Regression Harness with surface-aware replay + variants, Slack alerts on pass→fail |
+| Security Researcher | Config-driven target, target-agnostic message schemas, threat-model-as-markdown, reusable mutation operators, generic Judge-validation pipeline, §13 garak/PyRIT positioning |
+| The Agents | Most of the platform — Orchestrator scoring, Red Team mutation strategies, Tier-0/T1/T2 verdict pipeline, regression replay, auto-Documentation. But the data still needs to flow somewhere |
 
 This crosswalk is the **defense for every architectural decision** under the question "could we drop this?". If a component doesn't trace to a user, it's overhead; if it does, it's load-bearing.
