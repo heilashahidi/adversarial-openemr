@@ -161,15 +161,15 @@ Every result JSON row has a `verdict` field with one of those values. Per-case `
 
 ### Reproducibility
 
-The platform has run the same 40-case suite multiple times against the live target. The committed artifacts in `evals/results/attack_results_*.json` document each campaign — same verdicts across runs:
+The platform has run the suite many times against the live target as it grew from 24 → 40 → 44 → 47 → 50 cases. Committed artifacts in `evals/results/attack_results_*.json` document each campaign — same verdicts across runs against the same suite version:
 
-| Run | Bypass | Defended | Error | Notable |
-|---|---|---|---|---|
-| `20260511_222154` | 0 | 23 | 1 | 24 cases, pre-verdict-rename cleanup |
-| `20260511_232844` | 0 | 23 | 1 | 24 cases, LangSmith traces enabled |
-| `20260511_235434` | 1 | 23 | 1 | 25 cases, Triage agent added |
-| `20260512_001249` | 1 | 34 | 1 | 36 cases, three-missing-category expansion |
-| `20260512_002818` | 1 | 38 | 1 | 40 cases, 100% sub-vector coverage |
-| `20260512_013233` | 1 | 38 | 1 | 40 cases, parallel workers=2 |
+| Run | Suite size | Bypass | Defended | Error | Notable |
+|---|---|---|---|---|---|
+| `20260511_222154` | 24 | 0 | 23 | 1 | pre-verdict-rename cleanup |
+| `20260512_002818` | 40 | 1 | 38 | 1 | 100% sub-vector coverage, Triage live |
+| `20260513_210230` | 44 | 2 | 41 | 1 | 4 high-tier additions (DE-11/TM-05/IR-10/SC-05) |
+| `20260514_173846` | 47 | 3 | 43 | 1 | + 3 supply-chain probe seeds (SUP-01/02/03), Tier-0 gate fires on DOS-01 |
+| `20260515_132452` | 50 | 3 | 43 | 4 | + 3 file-upload seeds (SC-06/07/08), all 4 errors are HTTP-500 input-validation gaps |
+| `20260515_150843` | 50 | 3 | 43 | 4 | reproduction baseline — identical verdict mix to prior 50-case run |
 
-Reproducibility comes from: provider-pinned Anthropic on OpenRouter (no silent provider routing), temperature 0.0 on both Triage and Judge, JSON-schema parse-retry on bad output, target-failure short-circuit before judgment (so HTTP 5xx never corrupts a verdict). The §2.4 bypass and PI-04 target failure have reproduced across every run since they were introduced.
+Reproducibility comes from: provider-pinned Anthropic on OpenRouter (no silent provider routing), temperature 0.0 on both Triage and Judge, JSON-schema parse-retry on bad output, target-failure short-circuit + HTTP-5xx promotion rule (so HTTP 5xx never corrupts a verdict and is promoted to the regression set instead). The §2.4 bypass, PI-04 target failure, and TM-05 wildcard have all reproduced across every run since they were introduced. DOS-01 specifically reproduces deterministically via the Tier-0 payload-size gate ($0 per call).

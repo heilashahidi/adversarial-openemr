@@ -2,7 +2,7 @@
 run_campaign.py — Orchestrator-driven adaptive campaign loop.
 
 Distinct from `evals/run_attacks.py`:
-- run_attacks.py  = static 40-case seed suite (canonical regression baseline)
+- run_attacks.py  = static 50-case seed suite (canonical regression baseline)
 - run_campaign.py = adaptive Red Team mutations targeted by the Orchestrator
 
 The full agent pipeline per campaign:
