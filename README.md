@@ -13,6 +13,8 @@ license: mit
 
 Multi-agent adversarial evaluation platform that continuously attacks a live deployed Clinical Co-Pilot built on OpenEMR.
 
+📄 **Project page:** [`docs/index.html`](./docs/index.html) — landing page with quick links to the live dashboard, target, threat model, architecture, and reports. Renders directly on GitHub Pages if enabled (Settings → Pages → `main` / `docs`).
+
 ## Target (Stage 1)
 
 - **Live target URL:** https://openemr.146-190-75-148.sslip.io

@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Adversarial Platform — Clinical Co-Pilot</title>
+<meta name="description" content="Multi-agent adversarial evaluation platform that continuously red-teams a live OpenEMR Clinical Co-Pilot. 5 agents, 50 seed attacks, two-tier LLM Judge, deterministic regression harness." />
+<link rel="canonical" href="https://github.com/heilashahidi/adversarial-openemr" />
+<style>
+  :root {
+    --bg: #0e0f12;
+    --panel: #16181d;
+    --panel-2: #1c1f26;
+    --border: #262a33;
+    --fg: #e8eaed;
+    --muted: #9aa3af;
+    --accent: #ef4444;
+    --accent-2: #f97316;
+    --ok: #34d399;
+    --warn: #fbbf24;
+    --bad: #f87171;
+    --link: #93c5fd;
+    --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #ffffff;
+      --panel: #fafafa;
+      --panel-2: #f3f4f6;
+      --border: #e5e7eb;
+      --fg: #111827;
+      --muted: #4b5563;
+      --link: #1d4ed8;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg); }
+  body {
+    font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--link); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 48px 24px 80px; }
+
+  header.hero {
+    border: 1px solid var(--border);
+    background: linear-gradient(180deg, rgba(239,68,68,0.08), rgba(249,115,22,0.03) 60%, transparent);
+    border-radius: 16px;
+    padding: 36px 32px;
+    margin-bottom: 32px;
+  }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 12px;
+  }
+  h1 {
+    font-size: clamp(28px, 4vw, 40px);
+    line-height: 1.15;
+    margin: 0 0 12px;
+    letter-spacing: -0.01em;
+  }
+  .tagline {
+    color: var(--muted);
+    font-size: 17px;
+    margin: 0 0 24px;
+    max-width: 70ch;
+  }
+  .badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 24px;
+  }
+  .badge {
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    color: var(--fg);
+  }
+  .badge.live::before {
+    content: "";
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--ok);
+    margin-right: 6px;
+    vertical-align: middle;
+    box-shadow: 0 0 0 0 rgba(52,211,153,0.7);
+    animation: pulse 1.8s infinite;
+  }
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(52,211,153,0.6); }
+    70%  { box-shadow: 0 0 0 8px rgba(52,211,153,0); }
+    100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); }
+  }
+  .cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .btn {
+    display: inline-block;
+    padding: 10px 16px;
+    border-radius: 10px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    color: var(--fg);
+    font-weight: 500;
+    text-decoration: none;
+  }
+  .btn:hover { background: var(--panel); text-decoration: none; }
+  .btn.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+  .btn.primary:hover { background: #dc2626; }
+
+  section { margin-top: 40px; }
+  h2 {
+    font-size: 22px;
+    letter-spacing: -0.01em;
+    margin: 0 0 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+  h3 { font-size: 16px; margin: 18px 0 8px; }
+  p { margin: 0 0 14px; color: var(--fg); }
+  p.muted { color: var(--muted); }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px;
+  }
+  .card {
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px;
+    background: var(--panel);
+  }
+  .card h3 { margin-top: 0; }
+  .card .num {
+    font-family: var(--mono);
+    font-size: 28px;
+    font-weight: 600;
+    color: var(--fg);
+  }
+  .card .num.ok   { color: var(--ok); }
+  .card .num.bad  { color: var(--bad); }
+  .card .num.warn { color: var(--warn); }
+  .card small { color: var(--muted); }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+  th, td {
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+  th {
+    color: var(--muted);
+    font-weight: 500;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+  td code { font-family: var(--mono); font-size: 13px; }
+
+  code, pre { font-family: var(--mono); }
+  pre {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.55;
+  }
+
+  ul.clean { list-style: none; padding: 0; margin: 0; }
+  ul.clean li {
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+  }
+  ul.clean li:last-child { border-bottom: 0; }
+
+  footer {
+    margin-top: 64px;
+    padding-top: 24px;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 13px;
+  }
+  footer a { color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <p class="eyebrow">🛡️ Adversarial Evaluation · Healthcare AI</p>
+    <h1>Continuously red-teaming a live Clinical Co-Pilot.</h1>
+    <p class="tagline">
+      A multi-agent platform that fires 50 adversarial test cases at a real OpenEMR-backed Clinical Co-Pilot,
+      grades each response with a two-tier LLM Judge, and freezes confirmed bypasses into a deterministic
+      regression suite. No mock target — every attack hits a live HTTPS endpoint.
+    </p>
+
+    <div class="badges">
+      <span class="badge live">Live target</span>
+      <span class="badge">5 agents</span>
+      <span class="badge">50 seed attacks</span>
+      <span class="badge">29 sub-vectors</span>
+      <span class="badge">Haiku 4.5 → Sonnet 4.5</span>
+      <span class="badge">OWASP LLM mapped</span>
+      <span class="badge">~$0.003 / attack</span>
+    </div>
+
+    <div class="cta">
+      <a class="btn primary" href="https://heilashahidi-adversarial-openemr.hf.space/">Open live dashboard →</a>
+      <a class="btn" href="https://github.com/heilashahidi/adversarial-openemr">GitHub repo</a>
+      <a class="btn" href="https://openemr.146-190-75-148.sslip.io/health">Target /health</a>
+    </div>
+  </header>
+
+  <section id="results">
+    <h2>Latest live-run results</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Suite size</h3>
+        <div class="num">50</div>
+        <small>adversarial cases · 100% sub-vector coverage</small>
+      </div>
+      <div class="card">
+        <h3>Defended</h3>
+        <div class="num ok">43</div>
+        <small>target refused or blocked the attack</small>
+      </div>
+      <div class="card">
+        <h3>Confirmed bypasses</h3>
+        <div class="num bad">3</div>
+        <small>DE-09 · TM-05 · DOS-01 — frozen into regression set</small>
+      </div>
+      <div class="card">
+        <h3>Target errors</h3>
+        <div class="num warn">4</div>
+        <small>HTTP 500 input-validation gaps on <code>/extract</code></small>
+      </div>
+    </div>
+    <p class="muted" style="margin-top:14px;">
+      Latest reproduction baseline: run <code>20260515_150843</code> · identical verdict mix to the prior
+      50-case run · provider-pinned Anthropic via OpenRouter · temperature 0.0 on Triage + Judge.
+    </p>
+  </section>
+
+  <section id="agents">
+    <h2>Five-agent architecture</h2>
+    <table>
+      <thead>
+        <tr><th>Agent</th><th>Role</th><th>Model</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Orchestrator</strong></td>
+          <td>Plans campaigns, schedules workers, enforces budgets.</td>
+          <td>Llama 3.1 8B</td>
+        </tr>
+        <tr>
+          <td><strong>Red Team</strong></td>
+          <td>Generates and mutates adversarial payloads (jailbreaks, encoding, role hijack, PHI probes).</td>
+          <td>Mistral 7B + deterministic ops</td>
+        </tr>
+        <tr>
+          <td><strong>Triage (Tier-1)</strong></td>
+          <td>Cheap first-pass classification — filters obvious defends, escalates the rest.</td>
+          <td>Haiku 4.5 (Anthropic-pinned)</td>
+        </tr>
+        <tr>
+          <td><strong>Judge (Tier-2)</strong></td>
+          <td>Final verdict + rationale on escalated cases. Calibrated against a golden set.</td>
+          <td>Sonnet 4.5 (Anthropic-pinned)</td>
+        </tr>
+        <tr>
+          <td><strong>Documentation</strong></td>
+          <td>Writes per-finding reports in <code>reports/</code> for confirmed bypasses.</td>
+          <td>Mistral 7B</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="muted">
+      Plus the <strong>Regression Harness</strong> — deterministic replay of confirmed exploits with rule-based
+      pass/fail/inconclusive classification. No LLM in the replay path, so regression cost is $0.
+    </p>
+  </section>
+
+  <section id="target">
+    <h2>Target under test</h2>
+    <ul class="clean">
+      <li><strong>Live URL:</strong> <a href="https://openemr.146-190-75-148.sslip.io"><code>openemr.146-190-75-148.sslip.io</code></a></li>
+      <li><strong>Stack:</strong> Caddy (TLS) → uvicorn → FastAPI · OpenEMR + MySQL backend · Claude Sonnet synthesis worker</li>
+      <li><strong>Endpoints under attack:</strong> <code>POST /chat</code> (agent pipeline) · <code>POST /extract</code> (VLM document ingestion)</li>
+      <li><strong>Seeded patients:</strong> Four pre-seeded UUIDs (David Nakamura, Angela Washington, Sarah Smith, Emily Chen) for cross-patient + PHI-leakage probes.</li>
+      <li><strong>Auth posture:</strong> <code>/chat</code> accepts unauthenticated requests — <em>discovered</em> by the platform, documented as Critical in the threat model.</li>
+    </ul>
+  </section>
+
+  <section id="docs">
+    <h2>Documentation</h2>
+    <div class="grid">
+      <div class="card">
+        <h3><a href="https://github.com/heilashahidi/adversarial-openemr/blob/main/README.md">README</a></h3>
+        <small>Project overview, target setup, run instructions, reproducibility table.</small>
+      </div>
+      <div class="card">
+        <h3><a href="https://github.com/heilashahidi/adversarial-openemr/blob/main/THREAT_MODEL.md">THREAT_MODEL.md</a></h3>
+        <small>29 sub-vectors across 7 categories · OWASP LLM mapping · risk matrix.</small>
+      </div>
+      <div class="card">
+        <h3><a href="https://github.com/heilashahidi/adversarial-openemr/blob/main/ARCHITECTURE.md">ARCHITECTURE.md</a></h3>
+        <small>5-agent design, message schemas, scoring formula, regression pipeline.</small>
+      </div>
+      <div class="card">
+        <h3><a href="https://github.com/heilashahidi/adversarial-openemr/blob/main/USERS.md">USERS.md</a></h3>
+        <small>User personas and intended consumers of the platform's output.</small>
+      </div>
+      <div class="card">
+        <h3><a href="https://github.com/heilashahidi/adversarial-openemr/tree/main/reports">reports/</a></h3>
+        <small>Per-finding write-ups: DE-09, TM-05, DOS-01, PI-04, RT-ENC wrapper pattern.</small>
+      </div>
+      <div class="card">
+        <h3><a href="https://github.com/heilashahidi/adversarial-openemr/blob/main/evals/seed_attacks.py">seed_attacks.py</a></h3>
+        <small>The 50 adversarial cases — IDs, categories, payloads, regression flags.</small>
+      </div>
+    </div>
+  </section>
+
+  <section id="run">
+    <h2>Quick start</h2>
+    <h3>Smoke check (no API key needed)</h3>
+<pre>git clone https://github.com/heilashahidi/adversarial-openemr.git
+cd adversarial-openemr
+pip install -r requirements.txt
+python3 evals/run_attacks.py --smoke</pre>
+    <p class="muted">Prints target URL, <code>/health</code> status, <code>/chat</code> status, latency, and token counts in ~5–10 seconds. Useful for confirming the platform actually hits a live target before running anything LLM-billed.</p>
+
+    <h3>Full suite (~10 min · ~$0.14)</h3>
+<pre>cp .env.example .env   # fill in OPENROUTER_API_KEY
+python3 evals/run_attacks.py                    # all 50 cases
+python3 evals/run_attacks.py --id DE-09         # one case (e.g. §2.4 unauth probe)
+python3 evals/run_attacks.py --category prompt_injection</pre>
+  </section>
+
+  <footer>
+    <p>
+      Adversarial Platform · Clinical Co-Pilot ·
+      <a href="https://github.com/heilashahidi/adversarial-openemr">github.com/heilashahidi/adversarial-openemr</a> ·
+      MIT license
+    </p>
+  </footer>
+
+</div>
+</body>
+</html>
